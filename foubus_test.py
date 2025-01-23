@@ -1,6 +1,14 @@
 #!venv/bin/python3
-import unittest, glob, pickle, http.server, threading, datetime, logging
+import datetime
+import glob
+import http.server
+import logging
+import pickle
+import threading
+import unittest
+
 import pandas as pd
+
 import foubus
 
 pd.set_option('display.max_rows', 500)

@@ -1,9 +1,27 @@
 #!venv/bin/python3
-import datetime, urllib3, urllib3.exceptions, time, os.path, logging, sys, tempfile, gtfs_kit, shutil, glob, pickle, itertools, http.server, io
+import datetime
+import glob
+import http.server
+import io
+import itertools
+import logging
+import os
+import os.path
+import pickle
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import traceback
+import urllib.parse
+
+import gtfs_kit
 import pandas as pd
-from google.transit import gtfs_realtime_pb2
+import urllib3
+import urllib3.exceptions
 from google.protobuf import text_format
-import urllib.parse, threading, traceback, os
+from google.transit import gtfs_realtime_pb2
 
 LOG_FORMAT = '%(asctime)s [%(filename)s:%(lineno)d] [%(name)s] [%(threadName)s] %(levelname)s: %(message)s'
 logging.basicConfig(stream=sys.stderr, level=logging.INFO, format=LOG_FORMAT)
