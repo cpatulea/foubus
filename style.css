@@ -1,0 +1,44 @@
+body {
+  font-size: 150%;
+  font-family: sans-serif;
+}
+.route {
+  height: 2em;
+  display: table-row;
+  border-bottom: 1px darkgray solid;
+}
+.route .label {
+  width: 8em;
+  height: 2em;
+  text-align: center;
+  display: table-cell;
+  vertical-align: middle;
+  border-bottom: 1px darkgray solid;
+}
+.route.odd .label {
+  background-color: blue;
+  color: white;
+}
+.route.even .label {
+  background-color: aqua;
+}
+.route.orange-line .label {
+  background-color: orange;
+  color: black;
+}
+.route.finished .label {
+  background-color: gray;
+  color: black;
+  border-bottom: 1px darkgray solid;
+}
+.route .trip {
+  width: 6em;
+  text-align: right;
+  display: table-cell;
+  vertical-align: middle;
+  border-bottom: 1px darkgray solid;
+}
+.trip > img.realtime {
+  width: 1em;
+  height: 0.96em;
+}

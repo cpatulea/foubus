@@ -1,0 +1,26 @@
+<div id="error" style="display: none">Error loading schedule!</div>
+<iframe src="/loading.html" id="schedule" width="800" height="1200"></iframe>
+<script>
+  const params = new URLSearchParams(location.search);
+  const timeout = parseInt(params.get('refresh') ?? '30') * 1000;
+  function load() {
+    const req = new XMLHttpRequest();
+    req.responseType = 'text';
+    req.addEventListener("load", function () {
+      console.log('Got response ' + req.response.length + ' bytes');
+      document.getElementById('schedule').contentDocument.body.innerHTML = req.responseText;
+      document.getElementById('schedule').contentDocument.body.setAttribute('bgcolor', '#fff');
+      document.getElementById('error').style.display = 'none';
+      setTimeout(load, timeout);
+    });
+    req.addEventListener("error", function () {
+      console.log('Got error');
+      document.getElementById('error').style.display = 'block';
+      document.getElementById('schedule').contentDocument.body.setAttribute('bgcolor', '#ccc');
+      setTimeout(load, timeout);
+    });
+    req.open("GET", "/schedule.html");
+    req.send();
+  }
+  load();
+</script>

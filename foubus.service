@@ -1,0 +1,13 @@
+[Unit]
+Description=Foubus - real-time STM bus schedules
+After=network-online.target
+
+[Service]
+SyslogIdentifier=foubus
+Type=simple
+WorkingDirectory=/home/eigma/src/gtfs/
+ExecStart=/home/eigma/src/gtfs/foubus.py
+Restart=always
+
+[Install]
+WantedBy=default.target
