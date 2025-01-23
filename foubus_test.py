@@ -28,7 +28,14 @@ class FoubusTest(unittest.TestCase):
         now = datetime.datetime.fromisoformat("2025-01-18T17:10:00")
         # foubus.build_stop_timetable(now.date())
         tt = foubus.load_pickle()
-        self.assertEqual(now.date(), datetime.date.fromisoformat(tt.iloc[0]["date"]))
+        isodate = (
+            tt.iloc[0]["date"][0:4]
+            + "-"
+            + tt.iloc[0]["date"][4:6]
+            + "-"
+            + tt.iloc[0]["date"][6:8]
+        )
+        self.assertEqual(now.date(), datetime.date.fromisoformat(isodate))
 
         routes, tt = foubus.decorate_timetable(tt, now)
 
