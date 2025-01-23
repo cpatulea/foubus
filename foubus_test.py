@@ -3,7 +3,10 @@ import datetime
 import glob
 import http.server
 import logging
+import os
 import pickle
+import shutil
+import tempfile
 import threading
 import unittest
 
@@ -17,6 +20,17 @@ pd.set_option("display.width", 1000)
 
 
 class FoubusTest(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp(prefix="foubus_test-")
+        self.addCleanup(lambda d=d: shutil.rmtree(d))
+        os.symlink(os.path.relpath("testdata/", d), f"{d}/testdata")
+        os.symlink(os.path.relpath("style.css", d), f"{d}/style.css")
+        os.chdir(d)
+        foubus.download()
+        foubus.build_stop_timetable(datetime.date(2025, 1, 18))
+        with open("stm-apikey.txt", "w"):
+            pass
+
     def testRealtime(self):
         """
         Collect realtime test data:
@@ -26,7 +40,6 @@ class FoubusTest(unittest.TestCase):
           protoc --decode_raw < tripUpdates-20250118-162839.pb | grep '^      5: "' | egrep '"(17|35|36|190|371)"'
         """
         now = datetime.datetime.fromisoformat("2025-01-18T17:10:00")
-        # foubus.build_stop_timetable(now.date())
         tt = foubus.load_pickle()
         isodate = (
             tt.iloc[0]["date"][0:4]
@@ -60,8 +73,10 @@ class FoubusTest(unittest.TestCase):
         tt = foubus.next_trips(routes, tt, now)
         logging.info("Nexts: %s", tt)
 
+        warnings = []
         with open("schedule.html", "w") as f:
-            foubus.render(f, routes, tt, now)
+            foubus.render(f, routes, tt, now, warnings)
+        self.assertEqual([], warnings)
 
         (t,) = tt[tt["trip_label"] == "Côte-Vertu"].itertuples()
         self.assertEqual(datetime.timedelta(minutes=6), t.leave_in)
