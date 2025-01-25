@@ -1,4 +1,4 @@
-#!venv/bin/python3
+#!venv/bin/python3 -u
 import datetime
 import glob
 import http.server
