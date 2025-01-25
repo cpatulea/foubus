@@ -382,6 +382,7 @@ if __name__ == "__main__":
     g_tt = load_pickle()
 
     def _build_thread():
+        global g_tt
         try:
             while True:
                 sleepUntil(6, 0)
