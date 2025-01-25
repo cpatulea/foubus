@@ -203,6 +203,9 @@ def apply_realtime(
         resp.headers,
         len(resp.data),
     )
+    if resp.status != 200:
+        logging.warning("Response error: %r", resp.data.decode("utf-8", "replace"))
+        raise ValueError(str(resp.status))
     fm = gtfs_realtime_pb2.FeedMessage.FromString(resp.data)
     with open("tripUpdates.textproto", "w") as f:
         f.write(str(fm))
@@ -220,8 +223,6 @@ def apply_realtime(
         len(fm.entity),
         sum(len(e.trip_update.stop_time_update) for e in fm.entity),
     )
-
-    tt["realtime"] = [False] * len(tt)
 
     updates = 0
     for entity in fm.entity:
@@ -429,10 +430,11 @@ if __name__ == "__main__":
                 warnings = []
                 with g_lock:
                     routes, tt = decorate_timetable(g_tt, now)
+                tt["realtime"] = False
                 try:
                     tt = apply_realtime(tt, now)
                 except Exception as e:
-                    warnings = ["Error applying realtime: " + str(e)]
+                    warnings.append("Error applying realtime: " + str(e))
                 nexts = next_trips(routes, tt, now)
                 buffer = io.StringIO()
                 render(buffer, routes, nexts, now, warnings)
