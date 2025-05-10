@@ -1,4 +1,5 @@
 #!venv/bin/python3 -u
+import curses
 import datetime
 import glob
 import http.server
@@ -320,12 +321,16 @@ def next_trips(routes, tt, now):
     return tt
 
 
-def render(f, routes, nexts, now, warnings):
-    # f.write('<link rel="stylesheet" href="style.css" />\n')
+def render(html, term, routes, nexts, now, warnings):
+    # html.write('<link rel="stylesheet" href="style.css" />\n')
     # inline eliminates load flicker
-    f.write("<style>\n")
-    f.write(open("style.css").read())
-    f.write("</style>\n")
+    html.write("<style>\n")
+    html.write(open("style.css").read())
+    html.write("</style>\n")
+    term.write(curses.tparm(curses.tigetstr("cup"),0,0))
+    term.write(curses.tparm(curses.tigetstr("ed"), 2))
+    def term_write(s):
+        term.write(s.encode('utf-8'))
     print(routes)
     evenodd = itertools.cycle(["even", "odd"])
     for (route_id, _, trip_label), _ in routes.iterrows():
@@ -337,33 +342,55 @@ def render(f, routes, nexts, now, warnings):
         classes = ["route"]
         if len(rt) == 0:
             classes.append("finished")
+            term.write(curses.tparm(curses.tigetstr('setab'), curses.COLOR_WHITE))
         if route_id == "2":
             classes.append("orange-line")
+            # https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
+            term.write(curses.tparm(curses.tigetstr('setab'), 214))
+            term.write(curses.tparm(curses.tigetstr('setaf'), curses.COLOR_BLACK))
         classes.append(next(evenodd))
-        f.write(f'<div class="{" ".join(classes)}">\n')
-        f.write(f'  <div class="label">{trip_label}</div>\n')
+        if rt and route_id != "2":
+            bg = curses.COLOR_BLUE if 'even' in classes else 87
+            term.write(curses.tparm(curses.tigetstr('setab'), bg))
+            fg = curses.COLOR_WHITE if 'even' in classes else curses.COLOR_BLACK
+            term.write(curses.tparm(curses.tigetstr('setaf'), fg))
+        html.write(f'<div class="{" ".join(classes)}">\n')
+        html.write(f'  <div class="label">{trip_label}</div>\n')
+        term_write(f'{trip_label:15.15} ')
         print(rt)
         if rt:
             (r,) = rt  # assert len 1
             delta = int(r.leave_in.total_seconds()) // 60
-            f.write(f"<!-- {r} -->\n")
-            f.write(f'  <div class="trip">{delta} min')
+            html.write(f"<!-- {r} -->\n")
+            html.write(f'  <div class="trip">{delta} min')
+            term_write(f'{delta:4} min ')
             if r.realtime:
-                f.write(f'    <img class="realtime" src="realtime.png"/>')
+                html.write(f'    <img class="realtime" src="realtime.png"/>')
+            term_write(f'{"📡" if r.realtime else "  "} ')
             if r.last:
-                f.write(f'    <span class="last">LAST</span>')
-            f.write(f"  </div>\n")
+                html.write(f'    <span class="last">LAST</span>')
+                term_write(f'{"LAST" if r.last else "":4} ')
+            html.write(f"  </div>\n")
         else:
-            f.write('<div class="trip"></div>\n')
-        f.write("</div>\n")
-    f.write(f"<div>Times include walking time to the stop.</div>\n")
-    f.write(f"<div>Last updated: {now}</div>\n")
-    f.write(f"<div>Warnings: ")
+            html.write('<div class="trip"></div>\n')
+        html.write("</div>\n")
+
+        term.write(curses.tparm(curses.tigetstr('setab'), 0))
+        term.write(curses.tparm(curses.tigetstr('sgr'), 0))
+        term_write('\n')
+    html.write(f"<div>Times include walking time to the stop.</div>\n")
+    html.write(f"<div>Last updated: {now}</div>\n")
+    term_write(f'Last updated: {now}\n')
+    html.write(f"<div>Warnings: ")
+    term_write(f'Warnings: ')
     if not warnings:
-        f.write("none")
+        html.write("none")
+        term_write('none')
     else:
-        f.write(" ".join(warnings))
-    f.write("</div>")
+        html.write(" ".join(warnings))
+        term_write(" ".join(warnings))
+    html.write("</div>")
+    term_write('\n')
 
 
 # https://stackoverflow.com/a/65656371/2793863
@@ -376,6 +403,8 @@ def sleepUntil(hour, minute):
 
 
 if __name__ == "__main__":
+    curses.setupterm(term='xterm-256color')
+
     g_lock = threading.Lock()
 
     download()
@@ -424,7 +453,7 @@ if __name__ == "__main__":
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
-            elif path == "/schedule.html":
+            elif path in ["/schedule.html", "/schedule.txt"]:
                 self.send_response(200)
                 now = datetime.datetime.now()
                 warnings = []
@@ -436,14 +465,25 @@ if __name__ == "__main__":
                 except Exception as e:
                     warnings.append("Error applying realtime: " + str(e))
                 nexts = next_trips(routes, tt, now)
-                buffer = io.StringIO()
-                render(buffer, routes, nexts, now, warnings)
-                data = buffer.getvalue().encode("utf-8")
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Connection", "keep-alive")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+                html = io.StringIO()
+                term = io.BytesIO()
+                render(html, term, routes, nexts, now, warnings)
+                if path.endswith(".html"):
+                    data = html.getvalue().encode("utf-8")
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Connection", "keep-alive")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                elif path.endswith(".txt"):
+                    data = term.getvalue()
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Connection", "keep-alive")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    assert False
             else:
                 self.send_response(404)
                 self.send_header("Connection", "keep-alive")
