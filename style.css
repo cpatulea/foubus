@@ -37,6 +37,7 @@ body {
   display: table-cell;
   vertical-align: middle;
   border-bottom: 1px darkgray solid;
+  color: white;
 }
 .trip > img.realtime {
   width: 1em;
