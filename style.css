@@ -1,6 +1,7 @@
 body {
   font-size: 150%;
   font-family: sans-serif;
+  color: white;
 }
 .route {
   height: 2em;
@@ -21,6 +22,7 @@ body {
 }
 .route.even .label {
   background-color: aqua;
+  color: black;
 }
 .route.orange-line .label {
   background-color: orange;
