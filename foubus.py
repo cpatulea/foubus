@@ -356,7 +356,10 @@ def render(html, term, routes, nexts, now, warnings):
             fg = curses.COLOR_WHITE if 'even' in classes else curses.COLOR_BLACK
             term.write(curses.tparm(curses.tigetstr('setaf'), fg))
         html.write(f'<div class="{" ".join(classes)}">\n')
-        html.write(f'  <div class="label">{trip_label}</div>\n')
+        strikethrough = ''
+        if not rt:
+            strikethrough = 'style="text-decoration: line-through;"'
+        html.write(f'  <div class="label" {strikethrough}>{trip_label}</div>\n')
         term_write(f'{trip_label:15.15} ')
         print(rt)
         # The following code includes creative contributions from Claude, a generative AI system.
