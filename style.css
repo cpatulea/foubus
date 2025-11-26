@@ -2,6 +2,7 @@ body {
   font-size: 150%;
   font-family: sans-serif;
   color: white;
+  background-color: transparent;
 }
 .route {
   height: 2em;
