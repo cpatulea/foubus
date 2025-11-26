@@ -32,7 +32,7 @@
         const absSeconds = Math.abs(remainingSeconds);
         const sign = remainingSeconds < 0 ? "-" : "";
         if (absSeconds < 60) {
-          tripDiv.textContent = `${sign}${absSeconds} sec`;
+          tripDiv.textContent = `Now`;
         } else if (absSeconds < 3600) {
           const minutes = Math.floor(absSeconds / 60);
           tripDiv.textContent = `${sign}${minutes} min`;
