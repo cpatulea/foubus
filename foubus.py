@@ -333,6 +333,7 @@ def render(html, term, routes, nexts, now, warnings):
         term.write(s.encode('utf-8'))
     print(routes)
     evenodd = itertools.cycle(["even", "odd"])
+    trip_index = 0
     for (route_id, _, trip_label), _ in routes.iterrows():
         print(f"= {trip_label} =")
         rt = nexts[
@@ -358,12 +359,26 @@ def render(html, term, routes, nexts, now, warnings):
         html.write(f'  <div class="label">{trip_label}</div>\n')
         term_write(f'{trip_label:15.15} ')
         print(rt)
+        # The following code includes creative contributions from Claude, a generative AI system.
+        # https://declare-ai.org/1.0.0/total.html
         if rt:
             (r,) = rt  # assert len 1
-            delta = int(r.leave_in.total_seconds()) // 60
+            total_seconds = int(r.leave_in.total_seconds())
+            if total_seconds < 60:
+                delta_display = f"{total_seconds} sec"
+                term_display = f'{total_seconds:4} sec'
+            elif total_seconds < 3600:
+                delta_minutes = total_seconds // 60
+                delta_display = f"{delta_minutes} min"
+                term_display = f'{delta_minutes:4} min'
+            else:
+                delta_hours = total_seconds // 3600
+                delta_minutes = (total_seconds % 3600) // 60
+                delta_display = f"{delta_hours} hr {delta_minutes} min"
+                term_display = f'{delta_hours} hr {delta_minutes} min'
             html.write(f"<!-- {r} -->\n")
-            html.write(f'  <div class="trip">{delta} min')
-            term_write(f'{delta:4} min ')
+            html.write(f'  <div class="trip"><span class="countdown" data-trip-index="{trip_index}" data-trip-seconds="{total_seconds}">{delta_display}</span>')
+            term_write(term_display + ' ')
             if r.realtime:
                 html.write(f'    <img class="realtime" src="realtime.png"/>')
             term_write(f'{"📡" if r.realtime else "  "} ')
@@ -371,6 +386,7 @@ def render(html, term, routes, nexts, now, warnings):
                 html.write(f'    <span class="last">LAST</span>')
                 term_write(f'{"LAST" if r.last else "":4} ')
             html.write(f"  </div>\n")
+            trip_index += 1
         else:
             html.write('<div class="trip"></div>\n')
         html.write("</div>\n")
@@ -379,7 +395,8 @@ def render(html, term, routes, nexts, now, warnings):
         term.write(curses.tparm(curses.tigetstr('sgr'), 0))
         term_write('\n')
     html.write(f"<div>Times include walking time to the stop.</div>\n")
-    html.write(f"<div>Last updated: {now}</div>\n")
+    html.write(f'<div>Last updated: <span class="last-updated-time">00:00</span> ago</div>\n')
+    # end of partially AI generated code.
     term_write(f'Last updated: {now}\n')
     html.write(f"<div>Warnings: ")
     term_write(f'Warnings: ')

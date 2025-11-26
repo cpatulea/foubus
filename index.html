@@ -3,6 +3,50 @@
 <script>
   const params = new URLSearchParams(location.search);
   const timeout = parseInt(params.get('refresh') ?? '30') * 1000;
+  let lastUpdateTime = null;
+  let scheduleData = null;
+
+  /**
+   * This function was created by Claude, a generative AI system.
+   * https://declare-ai.org/1.0.0/total.html
+   */
+  function updateCountdowns() {
+    if (!scheduleData) return;
+
+    const iframe = document.getElementById('schedule').contentDocument;
+    const now = Date.now();
+    const elapsed = Math.floor((now - lastUpdateTime) / 1000);
+
+    // Update "last updated" time
+    const lastUpdatedDiv = iframe.querySelector('.last-updated-time');
+    if (lastUpdatedDiv) {
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      lastUpdatedDiv.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    scheduleData.forEach((item, index) => {
+      const tripDiv = iframe.querySelector(`[data-trip-index="${index}"]`);
+      if (tripDiv) {
+        const remainingSeconds = item.seconds - elapsed;
+        const absSeconds = Math.abs(remainingSeconds);
+        const sign = remainingSeconds < 0 ? "-" : "";
+        if (absSeconds < 60) {
+          tripDiv.textContent = `${sign}${absSeconds} sec`;
+        } else if (absSeconds < 3600) {
+          const minutes = Math.floor(absSeconds / 60);
+          tripDiv.textContent = `${sign}${minutes} min`;
+        } else {
+          const hours = Math.floor(absSeconds / 3600);
+          const minutes = Math.floor((absSeconds % 3600) / 60);
+          tripDiv.textContent = `${sign}${hours} hr ${minutes} min`;
+        }
+      }
+    });
+  }
+
+  setInterval(updateCountdowns, 1000);
+
   function load() {
     const req = new XMLHttpRequest();
     req.responseType = 'text';
@@ -11,6 +55,17 @@
       document.getElementById('schedule').contentDocument.body.innerHTML = req.responseText;
       document.getElementById('schedule').contentDocument.body.setAttribute('bgcolor', '#fff');
       document.getElementById('error').style.display = 'none';
+      // The following code was created by Claude, a generative AI system.
+      // https://declare-ai.org/1.0.0/total.html
+      lastUpdateTime = Date.now();
+
+      // Extract schedule data
+      const iframe = document.getElementById('schedule').contentDocument;
+      const tripDivs = iframe.querySelectorAll('[data-trip-seconds]');
+      scheduleData = Array.from(tripDivs).map(div => ({
+        seconds: parseInt(div.getAttribute('data-trip-seconds'))
+      }));
+      // End of AI generated code
       setTimeout(load, timeout);
     });
     req.addEventListener("error", function () {
