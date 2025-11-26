@@ -1,5 +1,5 @@
 <div id="error" style="display: none">Error loading schedule!</div>
-<iframe src="/loading.html" id="schedule" width="800" height="1200"></iframe>
+<iframe src="/loading.html" id="schedule" width="100%" height="100%" style="border: none"></iframe>
 <script>
   const params = new URLSearchParams(location.search);
   const timeout = parseInt(params.get('refresh') ?? '30') * 1000;
