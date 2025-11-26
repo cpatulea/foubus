@@ -365,8 +365,8 @@ def render(html, term, routes, nexts, now, warnings):
             (r,) = rt  # assert len 1
             total_seconds = int(r.leave_in.total_seconds())
             if total_seconds < 60:
-                delta_display = f"{total_seconds} sec"
-                term_display = f'{total_seconds:4} sec'
+                delta_display = f"Now"
+                term_display = f'Now'
             elif total_seconds < 3600:
                 delta_minutes = total_seconds // 60
                 delta_display = f"{delta_minutes} min"
