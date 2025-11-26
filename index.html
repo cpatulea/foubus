@@ -18,11 +18,11 @@
     const elapsed = Math.floor((now - lastUpdateTime) / 1000);
 
     // Update "last updated" time
-    const lastUpdatedDiv = iframe.querySelector('.last-updated-time');
+    const lastUpdatedDiv = iframe.querySelector('.last-updated-relative');
     if (lastUpdatedDiv) {
       const minutes = Math.floor(elapsed / 60);
       const seconds = elapsed % 60;
-      lastUpdatedDiv.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      lastUpdatedDiv.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')} ago`;
     }
 
     scheduleData.forEach((item, index) => {

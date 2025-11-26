@@ -398,7 +398,7 @@ def render(html, term, routes, nexts, now, warnings):
         term.write(curses.tparm(curses.tigetstr('sgr'), 0))
         term_write('\n')
     html.write(f"<div>Times include walking time to the stop.</div>\n")
-    html.write(f'<div>Last updated: <span class="last-updated-time">{now}</span> ago</div>\n')
+    html.write(f'<div>Last updated: <span class="last-updated-time">{now.strftime("%x %H:%M")}</span><br/><span class="last-updated-relative">00:00 ago</span></div>\n')
     # end of partially AI generated code.
     term_write(f'Last updated: {now}\n')
     html.write(f"<div>Warnings: ")
