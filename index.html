@@ -29,17 +29,17 @@
       const tripDiv = iframe.querySelector(`[data-trip-index="${index}"]`);
       if (tripDiv) {
         const remainingSeconds = item.seconds - elapsed;
-        const absSeconds = Math.abs(remainingSeconds);
-        const sign = remainingSeconds < 0 ? "-" : "";
-        if (absSeconds < 60) {
+        if (remainingSeconds < 0) {
+          tripDiv.textContent = `Passed`;
+        } else if (remainingSeconds < 60) {
           tripDiv.textContent = `Now`;
-        } else if (absSeconds < 3600) {
-          const minutes = Math.floor(absSeconds / 60);
-          tripDiv.textContent = `${sign}${minutes} min`;
+        } else if (remainingSeconds < 3600) {
+          const minutes = Math.floor(remainingSeconds / 60);
+          tripDiv.textContent = `${minutes} min`;
         } else {
-          const hours = Math.floor(absSeconds / 3600);
-          const minutes = Math.floor((absSeconds % 3600) / 60);
-          tripDiv.textContent = `${sign}${hours} hr ${minutes} min`;
+          const hours = Math.floor(remainingSeconds / 3600);
+          const minutes = Math.floor((remainingSeconds % 3600) / 60);
+          tripDiv.textContent = `${hours} hr ${minutes} min`;
         }
       }
     });
