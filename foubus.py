@@ -105,18 +105,20 @@ def build_stop_timetable(date):
     feed = gtfs_kit.read_feed("gtfs_stm.zip", dist_units="m")
     logging.info("Feed loaded")
 
+    stops = feed.stops[feed.stops["stop_name"].isin(STOPS)]
+    feed.stop_times = feed.stop_times[feed.stop_times["stop_id"].isin(stops["stop_id"])]
+
     with tempfile.TemporaryDirectory(dir=".", prefix="stop_timetable-") as d:
-        df = feed.stops
-        for _, s in df[df["stop_name"].isin(STOPS)].iterrows():
-            tt = feed.build_stop_timetable(s["stop_id"], [date.strftime("%Y%m%d")])
-            tt["stop_name"] = [s["stop_name"]] * len(tt)
-            with open(f'{d}/stop-{s["stop_id"]}.txt', "w") as f:
+        for stop_id, stop_name in zip(stops["stop_id"], stops["stop_name"]):
+            tt = feed.build_stop_timetable(stop_id, [date.strftime("%Y%m%d")])
+            tt["stop_name"] = stop_name
+            with open(f"{d}/stop-{stop_id}.txt", "w") as f:
                 f.write(str(tt))
-            tt.to_csv(f'{d}/stop-{s["stop_id"]}.csv')
-            tt.to_json(f'{d}/stop-{s["stop_id"]}.json')
-            tt.to_pickle(f'{d}/stop-{s["stop_id"]}.pickle')
-            tt.to_html(f'{d}/stop-{s["stop_id"]}.html')
-            logging.info("Built stop %s (%s)", s["stop_id"], s["stop_name"])
+            tt.to_csv(f"{d}/stop-{stop_id}.csv")
+            tt.to_json(f"{d}/stop-{stop_id}.json")
+            tt.to_pickle(f"{d}/stop-{stop_id}.pickle")
+            tt.to_html(f"{d}/stop-{stop_id}.html")
+            logging.info("Built stop %s (%s)", stop_id, stop_name)
         try:
             shutil.rmtree("stop_timetable/")
         except FileNotFoundError:
