@@ -369,7 +369,10 @@ def render(html, term, routes, nexts, now, warnings):
         if rt:
             (r,) = rt  # assert len 1
             total_seconds = int(r.leave_in.total_seconds())
-            if total_seconds < 60:
+            if total_seconds < 0:
+                delta_display = f"Passed"
+                term_display = f'Passed'
+            elif total_seconds < 60:
                 delta_display = f"Now"
                 term_display = f'Now'
             elif total_seconds < 3600:
