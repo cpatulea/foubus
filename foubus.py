@@ -199,25 +199,21 @@ def decorate_timetable(tt, now):
         .fillna(tt["route_id"] + " " + tt["trip_headsign"])
     )
 
-    def _departure_time_dt(row):
-        isodate = row["date"][0:4] + "-" + row["date"][4:6] + "-" + row["date"][6:8]
-        noon = datetime.datetime.combine(
-            datetime.date.fromisoformat(isodate), datetime.time(12, 0, 0)
-        )
-        dep = row["departure_time"]
-        h, m, s = map(int, dep.split(":"))
-        return (
-            noon
-            - datetime.timedelta(hours=12)
-            + datetime.timedelta(hours=h, minutes=m, seconds=s)
-        )
+    # Vectorized: Convert date string to datetime
+    tt["date_dt"] = pd.to_datetime(tt["date"], format="%Y%m%d")
 
-    tt["departure_time_dt"] = tt.apply(_departure_time_dt, axis=1)
+    # Vectorized: Convert departure_time to timedelta and add to date
+    # departure_time format is HH:MM:SS (can exceed 24 hours for next-day service)
+    time_parts = tt["departure_time"].str.split(":", expand=True).astype(int)
+    tt["departure_time_dt"] = (
+        tt["date_dt"]
+        + pd.to_timedelta(time_parts[0], unit="h")
+        + pd.to_timedelta(time_parts[1], unit="m")
+        + pd.to_timedelta(time_parts[2], unit="s")
+    )
 
-    def _leave_in(row):
-        return row["departure_time_dt"] - now
-
-    tt["leave_in"] = tt.apply(_leave_in, axis=1)
+    # Vectorized: Calculate time until departure
+    tt["leave_in"] = tt["departure_time_dt"] - now
 
     routes = tt[["route_id", "route_id_int", "trip_label"]].value_counts()
     routes = pd.DataFrame(routes).sort_values(["route_id_int", "trip_label"])
@@ -323,14 +319,13 @@ def apply_realtime(tt, now, url=REALTIME_API_URL):
 
 
 def next_trips(routes, tt, now):
-    tt["next"] = len(tt) * [False]
-    tt["last"] = len(tt) * [False]
+    tt["next"] = False
+    tt["last"] = False
 
     # add walking time before picking next (might be too late)
-    def _add_walking_time(row):
-        return row["leave_in"] - pd.Timedelta(minutes=STOPS[row["stop_name"]])
-
-    tt["leave_in"] = tt.apply(_add_walking_time, axis=1)
+    tt["leave_in"] = tt["leave_in"] - pd.to_timedelta(
+        tt["stop_name"].map(STOPS), unit="min"
+    )
     for (_, _, trip_label), _ in routes.iterrows():
         logger.info("= {} =", trip_label)
         trips = list(
@@ -349,9 +344,9 @@ def next_trips(routes, tt, now):
             logger.info("Trip 2+ at index: {}", pd.Index([trips[0].Index]))
             tt.loc[pd.Index([trips[0].Index]), "next"] = True
     tt = tt[tt["next"]]
-    tt["leave_in"] = tt["leave_in"].apply(
-        lambda dt: dt - pd.Timedelta(seconds=dt.seconds % 60)
-    )
+
+    tt["leave_in"] = tt["leave_in"].dt.floor("min")
+
     logger.info("Next trips leave: {}", tt)
     logger.info("Next trips next: {}", tt["next"])
     return tt
