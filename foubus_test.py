@@ -1,7 +1,9 @@
 #!venv/bin/python3
+import curses
 import datetime
 import glob
 import http.server
+import io
 import logging
 import os
 import pickle
@@ -26,10 +28,14 @@ class FoubusTest(unittest.TestCase):
         os.symlink(os.path.relpath("testdata/", d), f"{d}/testdata")
         os.symlink(os.path.relpath("style.css", d), f"{d}/style.css")
         os.chdir(d)
+        # Exercise the download code, but then immediately replace with a
+        # snapshot which matches the dates hardcoded in this test.
         foubus.download()
+        shutil.copy('testdata/gtfs_stm-2024-12-12.zip', 'gtfs_stm.zip')
         foubus.build_stop_timetable(datetime.date(2025, 1, 18))
         with open("stm-apikey.txt", "w"):
             pass
+        curses.setupterm(term='xterm-256color')
 
     def testRealtime(self):
         """
@@ -67,6 +73,7 @@ class FoubusTest(unittest.TestCase):
 
         self.addCleanup(_shutdown)
 
+        tt["realtime"] = False
         tt = foubus.apply_realtime(
             tt, now, url="http://localhost:9191/tripUpdates-20250118-162839.pb"
         )
@@ -74,8 +81,9 @@ class FoubusTest(unittest.TestCase):
         logging.info("Nexts: %s", tt)
 
         warnings = []
+        term = io.BytesIO()
         with open("schedule.html", "w") as f:
-            foubus.render(f, routes, tt, now, warnings)
+            foubus.render(f, term, routes, tt, now, warnings)
         self.assertEqual([], warnings)
 
         (t,) = tt[tt["trip_label"] == "Côte-Vertu"].itertuples()
