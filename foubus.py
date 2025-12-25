@@ -5,6 +5,7 @@ import glob
 import http.server
 import io
 import itertools
+import mimetypes
 import os
 import os.path
 import pickle
@@ -510,6 +511,80 @@ def sleepUntil(hour, minute):
     time.sleep((future - t).total_seconds())
 
 
+class RequestHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def _send_response(self, data, content_type=None, status=200):
+        """Helper to send HTTP response with proper headers."""
+        self.send_response(status)
+        if content_type:
+            self.send_header("Content-Type", content_type)
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        logger.debug(f"Request: {path}")
+
+        try:
+            if path in ["/", "/realtime.png"]:
+                # Serve static files
+                file_path = path.lstrip("/") or "index.html"
+                try:
+                    with open(file_path, "rb") as f:
+                        data = f.read()
+                    content_type, _ = mimetypes.guess_type(file_path)
+                    self._send_response(data, content_type)
+                except FileNotFoundError:
+                    logger.warning(f"File not found: {file_path}")
+                    self._send_response(b"File not found", "text/plain", 404)
+
+            elif path == "/loading.html":
+                data = "Loading...".encode("utf-8")
+                self._send_response(data, "text/html; charset=utf-8")
+
+            elif path in ["/schedule.html", "/schedule.txt"]:
+                # Generate dynamic schedule
+                now = datetime.datetime.now()
+                warnings = []
+                with g_lock:
+                    routes, tt = decorate_timetable(g_tt, now)
+                tt["realtime"] = False
+                try:
+                    tt = apply_realtime(tt, now)
+                except Exception as e:
+                    logger.warning(f"Error applying realtime: {e}")
+                    warnings.append("Error applying realtime: " + str(e))
+                nexts = next_trips(routes, tt, now)
+                html = io.StringIO()
+                term = io.BytesIO()
+                render(html, term, routes, nexts, now, warnings)
+
+                if path.endswith(".html"):
+                    data = html.getvalue().encode("utf-8")
+                    self._send_response(data, "text/html; charset=utf-8")
+                elif path.endswith(".txt"):
+                    data = term.getvalue()
+                    self._send_response(data, "text/plain; charset=utf-8")
+                else:
+                    raise ValueError(f"Unexpected path format: {path}")
+
+            else:
+                # 404 Not Found
+                self._send_response(b"", None, 404)
+
+        except Exception as e:
+            logger.error(f"Error handling request {path}: {e}")
+            try:
+                self._send_response(
+                    f"Internal Server Error: {e}".encode("utf-8"), "text/plain", 500
+                )
+            except Exception:
+                pass  # If we can't send error response, give up
+
+
 if __name__ == "__main__":
     curses.setupterm(term="xterm-256color")
 
@@ -544,66 +619,6 @@ if __name__ == "__main__":
     th = threading.Thread(target=_build_thread, name="build thread")
     th.daemon = True
     th.start()
-
-    class RequestHandler(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def do_GET(self):
-            path = urllib.parse.urlparse(self.path).path
-            if path in ["/", "/realtime.png"]:
-                self.send_response(200)
-                path = path.lstrip("/")
-                path = path if path else "index.html"
-                with open(path, "rb") as f:
-                    data = f.read()
-                self.send_header("Connection", "keep-alive")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-            elif path in ["/loading.html"]:
-                self.send_response(200)
-                data = "Loading...".encode("utf-8")
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Connection", "keep-alive")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-            elif path in ["/schedule.html", "/schedule.txt"]:
-                self.send_response(200)
-                now = datetime.datetime.now()
-                warnings = []
-                with g_lock:
-                    routes, tt = decorate_timetable(g_tt, now)
-                tt["realtime"] = False
-                try:
-                    tt = apply_realtime(tt, now)
-                except Exception as e:
-                    warnings.append("Error applying realtime: " + str(e))
-                nexts = next_trips(routes, tt, now)
-                html = io.StringIO()
-                term = io.BytesIO()
-                render(html, term, routes, nexts, now, warnings)
-                if path.endswith(".html"):
-                    data = html.getvalue().encode("utf-8")
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
-                    self.send_header("Connection", "keep-alive")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                elif path.endswith(".txt"):
-                    data = term.getvalue()
-                    self.send_header("Content-Type", "text/plain; charset=utf-8")
-                    self.send_header("Connection", "keep-alive")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                else:
-                    assert False
-            else:
-                self.send_response(404)
-                self.send_header("Connection", "keep-alive")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
 
     server = http.server.ThreadingHTTPServer(("", SERVER_PORT), RequestHandler)
     logger.info("Server started")
