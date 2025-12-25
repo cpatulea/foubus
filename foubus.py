@@ -51,7 +51,7 @@ def download():
     if datetime.datetime.now() >= (revalidated + datetime.timedelta(hours=24)).replace(
         hour=3
     ):
-        logger.info("Revalidating (last at %s)", revalidated)
+        logger.info("Revalidating (last at {})", revalidated)
 
         url = "https://www.stm.info/sites/default/files/gtfs/gtfs_stm.zip"
 
@@ -65,13 +65,13 @@ def download():
                     "%a, %d %b %Y %H:%M:%S GMT", time.gmtime(mtime)
                 )
             }
-        logger.info("If-Modified-Since: %s", headers.get("If-Modified-Since"))
+        logger.info("If-Modified-Since: {}", headers.get("If-Modified-Since"))
 
         resp = http_pool.request(
             "GET", url, headers=headers, timeout=3600.0, preload_content=False
         )
         logger.info(
-            "Response: %s %s (headers: %s)", resp.status, resp.reason, resp.headers
+            "Response: {} {} (headers: {})", resp.status, resp.reason, resp.headers
         )
 
         if resp.status == 304:
@@ -87,7 +87,7 @@ def download():
             with tempfile.NamedTemporaryFile(
                 dir=".", prefix=os.path.basename(url) + "-", delete=False
             ) as f:
-                logger.info("Downloading to %s", f.name)
+                logger.info("Downloading to {}", f.name)
                 while chunk := resp.read(1024 * 1024):
                     f.write(chunk)
 
@@ -95,7 +95,7 @@ def download():
 
             os.utime(f.name, (last_modified, last_modified))
             os.rename(f.name, os.path.basename(url))
-            logger.info("Saved to %s", os.path.basename(url))
+            logger.info("Saved to {}", os.path.basename(url))
 
             revalidated = datetime.datetime.now()
         else:
@@ -121,7 +121,7 @@ def build_stop_timetable(date):
             tt.to_json(f"{d}/stop-{stop_id}.json")
             tt.to_pickle(f"{d}/stop-{stop_id}.pickle")
             tt.to_html(f"{d}/stop-{stop_id}.html")
-            logger.info("Built stop %s (%s)", stop_id, stop_name)
+            logger.info("Built stop {} ({})", stop_id, stop_name)
         try:
             shutil.rmtree("stop_timetable/")
         except FileNotFoundError:
@@ -204,20 +204,20 @@ def apply_realtime(
         timeout=10.0,
     )
     logger.info(
-        "Response: %s %s (headers: %s, size: %d)",
+        "Response: {} {} (headers: {}, size: {})",
         resp.status,
         resp.reason,
         resp.headers,
         len(resp.data),
     )
     if resp.status != 200:
-        logger.warning("Response error: %r", resp.data.decode("utf-8", "replace"))
+        logger.warning("Response error: {!r}", resp.data.decode("utf-8", "replace"))
         raise ValueError(str(resp.status))
     fm = gtfs_realtime_pb2.FeedMessage.FromString(resp.data)
     with open("tripUpdates.textproto", "w") as f:
         f.write(str(fm))
     logger.info(
-        "TripUpdates header: %s (timestamp %s, age %d seconds)",
+        "TripUpdates header: {} (timestamp {}, age {} seconds)",
         text_format.MessageToString(fm.header, as_one_line=True),
         datetime.datetime.fromtimestamp(fm.header.timestamp),
         (
@@ -226,7 +226,7 @@ def apply_realtime(
         ).total_seconds(),
     )
     logger.info(
-        "TripUpdates: %d entity, %d stop_time_update",
+        "TripUpdates: {} entity, {} stop_time_update",
         len(fm.entity),
         sum(len(e.trip_update.stop_time_update) for e in fm.entity),
     )
@@ -236,7 +236,7 @@ def apply_realtime(
         assert entity.trip_update.trip.trip_id, str(entity)
         if (tt["trip_id"] == entity.trip_update.trip.trip_id).any():
             logger.info(
-                "trip_update for %s: %s: %d stop_time_update",
+                "trip_update for {}: {}: {} stop_time_update",
                 entity.trip_update.trip.trip_id,
                 text_format.MessageToString(entity.trip_update.trip, as_one_line=True),
                 len(entity.trip_update.stop_time_update),
@@ -268,7 +268,7 @@ def apply_realtime(
                     # print(stu)
                     if not stu.departure.time:
                         logger.warning(
-                            "No departure time: trip: %s stop_time_update: %s",
+                            "No departure time: trip: {} stop_time_update: {}",
                             text_format.MessageToString(
                                 entity.trip_update.trip, as_one_line=True
                             ),
@@ -289,7 +289,7 @@ def apply_realtime(
                         print(row)
                         updates += 1
 
-    logger.info("TripUpdates for us: %d", updates)
+    logger.info("TripUpdates for us: {}", updates)
     return tt
 
 
@@ -303,28 +303,28 @@ def next_trips(routes, tt, now):
 
     tt["leave_in"] = tt.apply(_add_walking_time, axis=1)
     for (route_id, _, trip_label), _ in routes.iterrows():
-        logger.info("= %s =", trip_label)
+        logger.info("= {} =", trip_label)
         trips = list(
             tt[
                 (tt["trip_label"] == trip_label)
                 & (tt["leave_in"].apply(pd.Timedelta.total_seconds) >= 0)
             ][:2].itertuples()
         )
-        logger.info("Trips: %s", trips)
+        logger.info("Trips: {}", trips)
         if len(trips) == 0:
             pass
         elif len(trips) == 1:
             tt.loc[pd.Index([trips[0].Index]), "next"] = True
             tt.loc[pd.Index([trips[0].Index]), "last"] = True
         elif len(trips) >= 2:
-            logger.info("Trip 2+ at index: %s", pd.Index([trips[0].Index]))
+            logger.info("Trip 2+ at index: {}", pd.Index([trips[0].Index]))
             tt.loc[pd.Index([trips[0].Index]), "next"] = True
     tt = tt[tt["next"]]
     tt["leave_in"] = tt["leave_in"].apply(
         lambda dt: dt - pd.Timedelta(seconds=dt.seconds % 60)
     )
-    logger.info("Next trips leave: %s", tt)
-    logger.info("Next trips next: %s", tt["next"])
+    logger.info("Next trips leave: {}", tt)
+    logger.info("Next trips next: {}", tt["next"])
     return tt
 
 
