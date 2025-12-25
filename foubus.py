@@ -292,8 +292,8 @@ def apply_realtime(tt, now, url=REALTIME_API_URL):
                 ]
                 if not row.empty:
                     assert len(row) == 1, row
-                    # print(row)
-                    # print(stu)
+                    # logger.info(row)
+                    # logger.info(stu)
                     if not stu.departure.time:
                         logger.warning(
                             "No departure time: trip: {} stop_time_update: {}",
@@ -314,7 +314,7 @@ def apply_realtime(tt, now, url=REALTIME_API_URL):
                             True,
                             datetime.datetime.fromtimestamp(stu.departure.time) - now,
                         ]
-                        print(row)
+                        logger.info(row)
                         updates += 1
 
     logger.info("TripUpdates for us: {}", updates)
@@ -356,7 +356,90 @@ def next_trips(routes, tt, now):
     return tt
 
 
+def _format_time_display(total_seconds):
+    """Format time in seconds to human-readable display strings.
+
+    Returns tuple of (html_display, terminal_display).
+    """
+    if total_seconds < SECONDS_PER_MINUTE:
+        return "Now", "Now"
+    elif total_seconds < SECONDS_PER_HOUR:
+        delta_minutes = total_seconds // SECONDS_PER_MINUTE
+        return f"{delta_minutes} min", f"{delta_minutes:4} min"
+    else:
+        delta_hours = total_seconds // SECONDS_PER_HOUR
+        delta_minutes = (total_seconds % SECONDS_PER_HOUR) // SECONDS_PER_MINUTE
+        return (
+            f"{delta_hours} hr {delta_minutes} min",
+            f"{delta_hours} hr {delta_minutes} min",
+        )
+
+
+def _render_route_html(html, trip_label, rt, classes, trip_index):
+    """Render a single route to HTML."""
+    strikethrough = 'style="text-decoration: line-through;"' if not rt else ""
+    html.write(f'  <div class="label" {strikethrough}>{trip_label}</div>\n')
+
+    if rt:
+        (r,) = rt  # assert len 1
+        total_seconds = int(r.leave_in.total_seconds())
+        delta_display, _ = _format_time_display(total_seconds)
+
+        html.write(f"<!-- {r} -->\n")
+        html.write(
+            f'  <div class="trip"><span class="countdown" data-trip-index="{trip_index}" '
+            f'data-trip-seconds="{total_seconds}">{delta_display}</span>'
+        )
+        if r.realtime:
+            html.write('    <img class="realtime" src="realtime.png"/>')
+        if r.last:
+            html.write('    <span class="last">LAST</span>')
+        html.write("  </div>\n")
+        return trip_index + 1
+    else:
+        html.write('<div class="trip"></div>\n')
+        return trip_index
+
+
+def _render_route_terminal(term, trip_label, rt, route_id, is_even):
+    """Render a single route to terminal."""
+
+    def term_write(s):
+        term.write(s.encode("utf-8"))
+
+    # Set background colors
+    if not rt:
+        term.write(curses.tparm(curses.tigetstr("setab"), curses.COLOR_WHITE))
+    elif route_id == "2":
+        # https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
+        term.write(curses.tparm(curses.tigetstr("setab"), ORANGE_LINE_COLOR))
+        term.write(curses.tparm(curses.tigetstr("setaf"), curses.COLOR_BLACK))
+    else:
+        bg = curses.COLOR_BLUE if is_even else ALTERNATE_BG_COLOR
+        term.write(curses.tparm(curses.tigetstr("setab"), bg))
+        fg = curses.COLOR_WHITE if is_even else curses.COLOR_BLACK
+        term.write(curses.tparm(curses.tigetstr("setaf"), fg))
+
+    # Write trip label
+    term_write(f"{trip_label:15.15} ")
+
+    # Write trip details if available
+    if rt:
+        (r,) = rt
+        total_seconds = int(r.leave_in.total_seconds())
+        _, term_display = _format_time_display(total_seconds)
+        term_write(term_display + " ")
+        term_write(f'{"📡" if r.realtime else "  "} ')
+        term_write(f'{"LAST" if r.last else "":4} ')
+
+    # Reset terminal colors
+    term.write(curses.tparm(curses.tigetstr("setab"), 0))
+    term.write(curses.tparm(curses.tigetstr("sgr"), 0))
+    term_write("\n")
+
+
 def render(html, term, routes, nexts, now, warnings):
+    """Render the schedule to both HTML and terminal output."""
     # html.write('<link rel="stylesheet" href="style.css" />\n')
     # inline eliminates load flicker
     html.write("<style>\n")
@@ -365,83 +448,47 @@ def render(html, term, routes, nexts, now, warnings):
     term.write(curses.tparm(curses.tigetstr("cup"), 0, 0))
     term.write(curses.tparm(curses.tigetstr("ed"), 2))
 
-    def term_write(s):
-        term.write(s.encode("utf-8"))
-
-    print(routes)
+    logger.info(routes)
     evenodd = itertools.cycle(["even", "odd"])
     trip_index = 0
+
     for (route_id, _, trip_label), _ in routes.iterrows():
-        print(f"= {trip_label} =")
+        logger.info(f"= {trip_label} =")
         rt = nexts[
             (nexts["trip_label"] == trip_label) & (nexts["departure_time_dt"] >= now)
         ][:2]
         rt = list(rt.itertuples())
+
+        # Build CSS classes
         classes = ["route"]
         if len(rt) == 0:
             classes.append("finished")
-            term.write(curses.tparm(curses.tigetstr("setab"), curses.COLOR_WHITE))
         if route_id == "2":
             classes.append("orange-line")
-            # https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
-            term.write(curses.tparm(curses.tigetstr("setab"), ORANGE_LINE_COLOR))
-            term.write(curses.tparm(curses.tigetstr("setaf"), curses.COLOR_BLACK))
-        classes.append(next(evenodd))
-        if rt and route_id != "2":
-            bg = curses.COLOR_BLUE if "even" in classes else ALTERNATE_BG_COLOR
-            term.write(curses.tparm(curses.tigetstr("setab"), bg))
-            fg = curses.COLOR_WHITE if "even" in classes else curses.COLOR_BLACK
-            term.write(curses.tparm(curses.tigetstr("setaf"), fg))
+        is_even = next(evenodd) == "even"
+        classes.append("even" if is_even else "odd")
+
+        logger.info(rt)
+
+        # Render to HTML
         html.write(f'<div class="{" ".join(classes)}">\n')
-        strikethrough = ""
-        if not rt:
-            strikethrough = 'style="text-decoration: line-through;"'
-        html.write(f'  <div class="label" {strikethrough}>{trip_label}</div>\n')
-        term_write(f"{trip_label:15.15} ")
-        print(rt)
-        # The following code includes creative contributions from Claude, a generative AI system.
-        # https://declare-ai.org/1.0.0/total.html
-        if rt:
-            (r,) = rt  # assert len 1
-            total_seconds = int(r.leave_in.total_seconds())
-            if total_seconds < SECONDS_PER_MINUTE:
-                delta_display = "Now"
-                term_display = "Now"
-            elif total_seconds < SECONDS_PER_HOUR:
-                delta_minutes = total_seconds // SECONDS_PER_MINUTE
-                delta_display = f"{delta_minutes} min"
-                term_display = f"{delta_minutes:4} min"
-            else:
-                delta_hours = total_seconds // SECONDS_PER_HOUR
-                delta_minutes = (total_seconds % SECONDS_PER_HOUR) // SECONDS_PER_MINUTE
-                delta_display = f"{delta_hours} hr {delta_minutes} min"
-                term_display = f"{delta_hours} hr {delta_minutes} min"
-            html.write(f"<!-- {r} -->\n")
-            html.write(
-                f'  <div class="trip"><span class="countdown" data-trip-index="{trip_index}" data-trip-seconds="{total_seconds}">{delta_display}</span>'
-            )
-            term_write(term_display + " ")
-            if r.realtime:
-                html.write('    <img class="realtime" src="realtime.png"/>')
-            term_write(f'{"📡" if r.realtime else "  "} ')
-            if r.last:
-                html.write('    <span class="last">LAST</span>')
-                term_write('{"LAST" if r.last else "":4} ')
-            html.write("  </div>\n")
-            trip_index += 1
-        else:
-            html.write('<div class="trip"></div>\n')
+        trip_index = _render_route_html(html, trip_label, rt, classes, trip_index)
         html.write("</div>\n")
 
-        term.write(curses.tparm(curses.tigetstr("setab"), 0))
-        term.write(curses.tparm(curses.tigetstr("sgr"), 0))
-        term_write("\n")
+        # Render to terminal
+        _render_route_terminal(term, trip_label, rt, route_id, is_even)
+
+    # Write footers
+    def term_write(s):
+        term.write(s.encode("utf-8"))
+
     html.write("<div>Times include walking time to the stop.</div>\n")
     html.write(
-        f'<div>Last updated: <span class="last-updated-time">{now.strftime("%x %H:%M")}</span><br/><span class="last-updated-relative">00:00 ago</span></div>\n'
+        f'<div>Last updated: <span class="last-updated-time">{now.strftime("%x %H:%M")}</span>'
+        f'<br/><span class="last-updated-relative">00:00 ago</span></div>\n'
     )
-    # end of partially AI generated code.
     term_write(f"Last updated: {now}\n")
+
     html.write("<div>Warnings: ")
     term_write("Warnings: ")
     if not warnings:
@@ -491,7 +538,7 @@ if __name__ == "__main__":
                 with g_lock:
                     g_tt = load_pickle()
         except Exception:
-            traceback.print_exc()
+            traceback.logger.info_exc()
             os.abort()
 
     th = threading.Thread(target=_build_thread, name="build thread")
