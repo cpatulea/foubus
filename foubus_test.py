@@ -1,16 +1,14 @@
 #!venv/bin/python3
 import datetime
-import glob
 import http.server
-import logging
 import os
-import pickle
 import shutil
 import tempfile
 import threading
 import unittest
 
 import pandas as pd
+from loguru import logger
 
 import foubus
 
@@ -27,7 +25,7 @@ class FoubusTest(unittest.TestCase):
         os.symlink(os.path.relpath("style.css", d), f"{d}/style.css")
         os.chdir(d)
         foubus.download()
-        foubus.build_stop_timetable(datetime.date(2025, 1, 18))
+        foubus.build_stop_timetable(datetime.date(2025, 12, 24))
         with open("stm-apikey.txt", "w"):
             pass
 
@@ -39,7 +37,7 @@ class FoubusTest(unittest.TestCase):
         Inspect:
           protoc --decode_raw < tripUpdates-20250118-162839.pb | grep '^      5: "' | egrep '"(17|35|36|190|371)"'
         """
-        now = datetime.datetime.fromisoformat("2025-01-18T17:10:00")
+        now = datetime.datetime.fromisoformat("2025-12-24T17:10:00")
         tt = foubus.load_pickle()
         isodate = (
             tt.iloc[0]["date"][0:4]
@@ -71,7 +69,7 @@ class FoubusTest(unittest.TestCase):
             tt, now, url="http://localhost:9191/tripUpdates-20250118-162839.pb"
         )
         tt = foubus.next_trips(routes, tt, now)
-        logging.info("Nexts: %s", tt)
+        logger.info("Nexts: %s", tt)
 
         warnings = []
         with open("schedule.html", "w") as f:
