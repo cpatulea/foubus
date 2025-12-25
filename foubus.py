@@ -302,7 +302,7 @@ def next_trips(routes, tt, now):
         return row["leave_in"] - pd.Timedelta(minutes=STOPS[row["stop_name"]])
 
     tt["leave_in"] = tt.apply(_add_walking_time, axis=1)
-    for (route_id, _, trip_label), _ in routes.iterrows():
+    for (_, _, trip_label), _ in routes.iterrows():
         logger.info("= {} =", trip_label)
         trips = list(
             tt[
