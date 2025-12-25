@@ -5,7 +5,6 @@ import glob
 import http.server
 import io
 import itertools
-import logging
 import os
 import os.path
 import pickle
@@ -20,15 +19,19 @@ import urllib.parse
 import gtfs_kit
 import pandas as pd
 import urllib3
-import urllib3.exceptions
 from google.protobuf import text_format
 from google.transit import gtfs_realtime_pb2
+from loguru import logger
 
-LOG_FORMAT = "%(asctime)s [%(filename)s:%(lineno)d] [%(name)s] [%(threadName)s] %(levelname)s: %(message)s"
-logging.basicConfig(stream=sys.stderr, level=logging.INFO, format=LOG_FORMAT)
-logging.getLogger("urllib3").setLevel(logging.DEBUG)
+# Configure loguru
+logger.remove()  # Remove default handler
+logger.add(
+    sys.stderr,
+    format="{time:YYYY-MM-DD HH:mm:ss} [{file}:{line}] [{name}] [{thread.name}] {level}: {message}",
+    level="INFO",
+)
 
-httppool = urllib3.PoolManager()
+http_pool = urllib3.PoolManager()
 revalidated = datetime.datetime.min
 
 STOPS = {
@@ -48,7 +51,7 @@ def download():
     if datetime.datetime.now() >= (revalidated + datetime.timedelta(hours=24)).replace(
         hour=3
     ):
-        logging.info("Revalidating (last at %s)", revalidated)
+        logger.info("Revalidating (last at %s)", revalidated)
 
         url = "https://www.stm.info/sites/default/files/gtfs/gtfs_stm.zip"
 
@@ -62,12 +65,12 @@ def download():
                     "%a, %d %b %Y %H:%M:%S GMT", time.gmtime(mtime)
                 )
             }
-        logging.info("If-Modified-Since: %s", headers.get("If-Modified-Since"))
+        logger.info("If-Modified-Since: %s", headers.get("If-Modified-Since"))
 
-        resp = httppool.request(
+        resp = http_pool.request(
             "GET", url, headers=headers, timeout=3600.0, preload_content=False
         )
-        logging.info(
+        logger.info(
             "Response: %s %s (headers: %s)", resp.status, resp.reason, resp.headers
         )
 
@@ -84,7 +87,7 @@ def download():
             with tempfile.NamedTemporaryFile(
                 dir=".", prefix=os.path.basename(url) + "-", delete=False
             ) as f:
-                logging.info("Downloading to %s", f.name)
+                logger.info("Downloading to %s", f.name)
                 while chunk := resp.read(1024 * 1024):
                     f.write(chunk)
 
@@ -92,7 +95,7 @@ def download():
 
             os.utime(f.name, (last_modified, last_modified))
             os.rename(f.name, os.path.basename(url))
-            logging.info("Saved to %s", os.path.basename(url))
+            logger.info("Saved to %s", os.path.basename(url))
 
             revalidated = datetime.datetime.now()
         else:
@@ -101,9 +104,9 @@ def download():
 
 def build_stop_timetable(date):
     """Run at 6am"""
-    logging.info("Reading feed...")
+    logger.info("Reading feed...")
     feed = gtfs_kit.read_feed("gtfs_stm.zip", dist_units="m")
-    logging.info("Feed loaded")
+    logger.info("Feed loaded")
 
     stops = feed.stops[feed.stops["stop_name"].isin(STOPS)]
     feed.stop_times = feed.stop_times[feed.stop_times["stop_id"].isin(stops["stop_id"])]
@@ -118,7 +121,7 @@ def build_stop_timetable(date):
             tt.to_json(f"{d}/stop-{stop_id}.json")
             tt.to_pickle(f"{d}/stop-{stop_id}.pickle")
             tt.to_html(f"{d}/stop-{stop_id}.html")
-            logging.info("Built stop %s (%s)", stop_id, stop_name)
+            logger.info("Built stop %s (%s)", stop_id, stop_name)
         try:
             shutil.rmtree("stop_timetable/")
         except FileNotFoundError:
@@ -193,13 +196,13 @@ def decorate_timetable(tt, now):
 def apply_realtime(
     tt, now, url="https://api.stm.info/pub/od/gtfs-rt/ic/v2/tripUpdates"
 ):
-    resp = httppool.request(
+    resp = http_pool.request(
         "GET",
         url,
         headers={"Apikey": open("stm-apikey.txt").read().strip()},
         timeout=10.0,
     )
-    logging.info(
+    logger.info(
         "Response: %s %s (headers: %s, size: %d)",
         resp.status,
         resp.reason,
@@ -207,21 +210,21 @@ def apply_realtime(
         len(resp.data),
     )
     if resp.status != 200:
-        logging.warning("Response error: %r", resp.data.decode("utf-8", "replace"))
+        logger.warning("Response error: %r", resp.data.decode("utf-8", "replace"))
         raise ValueError(str(resp.status))
     fm = gtfs_realtime_pb2.FeedMessage.FromString(resp.data)
     with open("tripUpdates.textproto", "w") as f:
         f.write(str(fm))
-    logging.info(
+    logger.info(
         "TripUpdates header: %s (timestamp %s, age %d seconds)",
         text_format.MessageToString(fm.header, as_one_line=True),
         datetime.datetime.fromtimestamp(fm.header.timestamp),
         (
-            datetime.datetime.now()
-            - datetime.datetime.fromtimestamp(fm.header.timestamp)
+            datetime.datetime.now() -
+            datetime.datetime.fromtimestamp(fm.header.timestamp)
         ).total_seconds(),
     )
-    logging.info(
+    logger.info(
         "TripUpdates: %d entity, %d stop_time_update",
         len(fm.entity),
         sum(len(e.trip_update.stop_time_update) for e in fm.entity),
@@ -231,7 +234,7 @@ def apply_realtime(
     for entity in fm.entity:
         assert entity.trip_update.trip.trip_id, str(entity)
         if (tt["trip_id"] == entity.trip_update.trip.trip_id).any():
-            logging.info(
+            logger.info(
                 "trip_update for %s: %s: %d stop_time_update",
                 entity.trip_update.trip.trip_id,
                 text_format.MessageToString(entity.trip_update.trip, as_one_line=True),
@@ -263,7 +266,7 @@ def apply_realtime(
                     # print(row)
                     # print(stu)
                     if not stu.departure.time:
-                        logging.warning(
+                        logger.warning(
                             "No departure time: trip: %s stop_time_update: %s",
                             text_format.MessageToString(
                                 entity.trip_update.trip, as_one_line=True
@@ -285,41 +288,42 @@ def apply_realtime(
                         print(row)
                         updates += 1
 
-    logging.info("TripUpdates for us: %d", updates)
+    logger.info("TripUpdates for us: %d", updates)
     return tt
 
 
 def next_trips(routes, tt, now):
     tt["next"] = len(tt) * [False]
     tt["last"] = len(tt) * [False]
+
     # add walking time before picking next (might be too late)
     def _add_walking_time(row):
         return row["leave_in"] - pd.Timedelta(minutes=STOPS[row["stop_name"]])
 
     tt["leave_in"] = tt.apply(_add_walking_time, axis=1)
     for (route_id, _, trip_label), _ in routes.iterrows():
-        logging.info("= %s =", trip_label)
+        logger.info("= %s =", trip_label)
         trips = list(
             tt[
                 (tt["trip_label"] == trip_label)
                 & (tt["leave_in"].apply(pd.Timedelta.total_seconds) >= 0)
             ][:2].itertuples()
         )
-        logging.info("Trips: %s", trips)
+        logger.info("Trips: %s", trips)
         if len(trips) == 0:
             pass
         elif len(trips) == 1:
             tt.loc[pd.Index([trips[0].Index]), "next"] = True
             tt.loc[pd.Index([trips[0].Index]), "last"] = True
         elif len(trips) >= 2:
-            logging.info("Trip 2+ at index: %s", pd.Index([trips[0].Index]))
+            logger.info("Trip 2+ at index: %s", pd.Index([trips[0].Index]))
             tt.loc[pd.Index([trips[0].Index]), "next"] = True
     tt = tt[tt["next"]]
     tt["leave_in"] = tt["leave_in"].apply(
         lambda dt: dt - pd.Timedelta(seconds=dt.seconds % 60)
     )
-    logging.info("Next trips leave: %s", tt)
-    logging.info("Next trips next: %s", tt["next"])
+    logger.info("Next trips leave: %s", tt)
+    logger.info("Next trips next: %s", tt["next"])
     return tt
 
 
@@ -329,10 +333,12 @@ def render(html, term, routes, nexts, now, warnings):
     html.write("<style>\n")
     html.write(open("style.css").read())
     html.write("</style>\n")
-    term.write(curses.tparm(curses.tigetstr("cup"),0,0))
+    term.write(curses.tparm(curses.tigetstr("cup"), 0, 0))
     term.write(curses.tparm(curses.tigetstr("ed"), 2))
+
     def term_write(s):
-        term.write(s.encode('utf-8'))
+        term.write(s.encode("utf-8"))
+
     print(routes)
     evenodd = itertools.cycle(["even", "odd"])
     trip_index = 0
@@ -345,24 +351,24 @@ def render(html, term, routes, nexts, now, warnings):
         classes = ["route"]
         if len(rt) == 0:
             classes.append("finished")
-            term.write(curses.tparm(curses.tigetstr('setab'), curses.COLOR_WHITE))
+            term.write(curses.tparm(curses.tigetstr("setab"), curses.COLOR_WHITE))
         if route_id == "2":
             classes.append("orange-line")
             # https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
-            term.write(curses.tparm(curses.tigetstr('setab'), 214))
-            term.write(curses.tparm(curses.tigetstr('setaf'), curses.COLOR_BLACK))
+            term.write(curses.tparm(curses.tigetstr("setab"), 214))
+            term.write(curses.tparm(curses.tigetstr("setaf"), curses.COLOR_BLACK))
         classes.append(next(evenodd))
         if rt and route_id != "2":
-            bg = curses.COLOR_BLUE if 'even' in classes else 87
-            term.write(curses.tparm(curses.tigetstr('setab'), bg))
-            fg = curses.COLOR_WHITE if 'even' in classes else curses.COLOR_BLACK
-            term.write(curses.tparm(curses.tigetstr('setaf'), fg))
+            bg = curses.COLOR_BLUE if "even" in classes else 87
+            term.write(curses.tparm(curses.tigetstr("setab"), bg))
+            fg = curses.COLOR_WHITE if "even" in classes else curses.COLOR_BLACK
+            term.write(curses.tparm(curses.tigetstr("setaf"), fg))
         html.write(f'<div class="{" ".join(classes)}">\n')
-        strikethrough = ''
+        strikethrough = ""
         if not rt:
             strikethrough = 'style="text-decoration: line-through;"'
         html.write(f'  <div class="label" {strikethrough}>{trip_label}</div>\n')
-        term_write(f'{trip_label:15.15} ')
+        term_write(f"{trip_label:15.15} ")
         print(rt)
         # The following code includes creative contributions from Claude, a generative AI system.
         # https://declare-ai.org/1.0.0/total.html
@@ -370,49 +376,53 @@ def render(html, term, routes, nexts, now, warnings):
             (r,) = rt  # assert len 1
             total_seconds = int(r.leave_in.total_seconds())
             if total_seconds < 60:
-                delta_display = f"Now"
-                term_display = f'Now'
+                delta_display = "Now"
+                term_display = "Now"
             elif total_seconds < 3600:
                 delta_minutes = total_seconds // 60
                 delta_display = f"{delta_minutes} min"
-                term_display = f'{delta_minutes:4} min'
+                term_display = f"{delta_minutes:4} min"
             else:
                 delta_hours = total_seconds // 3600
                 delta_minutes = (total_seconds % 3600) // 60
                 delta_display = f"{delta_hours} hr {delta_minutes} min"
-                term_display = f'{delta_hours} hr {delta_minutes} min'
+                term_display = f"{delta_hours} hr {delta_minutes} min"
             html.write(f"<!-- {r} -->\n")
-            html.write(f'  <div class="trip"><span class="countdown" data-trip-index="{trip_index}" data-trip-seconds="{total_seconds}">{delta_display}</span>')
-            term_write(term_display + ' ')
+            html.write(
+                f'  <div class="trip"><span class="countdown" data-trip-index="{trip_index}" data-trip-seconds="{total_seconds}">{delta_display}</span>'
+            )
+            term_write(term_display + " ")
             if r.realtime:
-                html.write(f'    <img class="realtime" src="realtime.png"/>')
+                html.write('    <img class="realtime" src="realtime.png"/>')
             term_write(f'{"📡" if r.realtime else "  "} ')
             if r.last:
-                html.write(f'    <span class="last">LAST</span>')
-                term_write(f'{"LAST" if r.last else "":4} ')
-            html.write(f"  </div>\n")
+                html.write('    <span class="last">LAST</span>')
+                term_write('{"LAST" if r.last else "":4} ')
+            html.write("  </div>\n")
             trip_index += 1
         else:
             html.write('<div class="trip"></div>\n')
         html.write("</div>\n")
 
-        term.write(curses.tparm(curses.tigetstr('setab'), 0))
-        term.write(curses.tparm(curses.tigetstr('sgr'), 0))
-        term_write('\n')
-    html.write(f"<div>Times include walking time to the stop.</div>\n")
-    html.write(f'<div>Last updated: <span class="last-updated-time">{now.strftime("%x %H:%M")}</span><br/><span class="last-updated-relative">00:00 ago</span></div>\n')
+        term.write(curses.tparm(curses.tigetstr("setab"), 0))
+        term.write(curses.tparm(curses.tigetstr("sgr"), 0))
+        term_write("\n")
+    html.write("<div>Times include walking time to the stop.</div>\n")
+    html.write(
+        f'<div>Last updated: <span class="last-updated-time">{now.strftime("%x %H:%M")}</span><br/><span class="last-updated-relative">00:00 ago</span></div>\n'
+    )
     # end of partially AI generated code.
-    term_write(f'Last updated: {now}\n')
-    html.write(f"<div>Warnings: ")
-    term_write(f'Warnings: ')
+    term_write(f"Last updated: {now}\n")
+    html.write("<div>Warnings: ")
+    term_write("Warnings: ")
     if not warnings:
         html.write("none")
-        term_write('none')
+        term_write("none")
     else:
         html.write(" ".join(warnings))
         term_write(" ".join(warnings))
     html.write("</div>")
-    term_write('\n')
+    term_write("\n")
 
 
 # https://stackoverflow.com/a/65656371/2793863
@@ -425,7 +435,7 @@ def sleepUntil(hour, minute):
 
 
 if __name__ == "__main__":
-    curses.setupterm(term='xterm-256color')
+    curses.setupterm(term="xterm-256color")
 
     g_lock = threading.Lock()
 
@@ -444,7 +454,7 @@ if __name__ == "__main__":
                 )
                 with g_lock:
                     g_tt = load_pickle()
-        except:
+        except Exception:
             traceback.print_exc()
             os.abort()
 
@@ -513,5 +523,5 @@ if __name__ == "__main__":
                 self.end_headers()
 
     server = http.server.ThreadingHTTPServer(("", 8000), RequestHandler)
-    logging.info("Server started")
+    logger.info("Server started")
     server.serve_forever()
