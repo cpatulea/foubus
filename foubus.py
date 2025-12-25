@@ -201,7 +201,7 @@ def decorate_timetable(tt, now):
 
     tt["date_dt"] = pd.to_datetime(tt["date"], format="%Y%m%d")
 
-    # Vectorized: Convert departure_time to timedelta and add to date
+    # Convert departure_time to timedelta and add to date
     # departure_time format is HH:MM:SS (can exceed 24 hours for next-day service)
     time_parts = tt["departure_time"].str.split(":", expand=True).astype(int)
     tt["departure_time_dt"] = (
