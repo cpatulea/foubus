@@ -199,7 +199,6 @@ def decorate_timetable(tt, now):
         .fillna(tt["route_id"] + " " + tt["trip_headsign"])
     )
 
-    # Vectorized: Convert date string to datetime
     tt["date_dt"] = pd.to_datetime(tt["date"], format="%Y%m%d")
 
     # Vectorized: Convert departure_time to timedelta and add to date
@@ -212,7 +211,7 @@ def decorate_timetable(tt, now):
         + pd.to_timedelta(time_parts[2], unit="s")
     )
 
-    # Vectorized: Calculate time until departure
+    # Calculate time until departure
     tt["leave_in"] = tt["departure_time_dt"] - now
 
     routes = tt[["route_id", "route_id_int", "trip_label"]].value_counts()
