@@ -44,16 +44,42 @@ STOPS = {
     "Notre-Dame / Place Saint-Henri": 8,
 }
 
+# Configuration constants
+REVALIDATION_INTERVAL_HOURS = 24
+REVALIDATION_HOUR = 3
+REBUILD_HOUR = 6
+TIMEZONE_OFFSET_HOURS = 5  # Hours to subtract for date calculation
+SERVER_PORT = 8000
+
+# Network timeouts
+DOWNLOAD_TIMEOUT_SECONDS = 3600.0
+REALTIME_TIMEOUT_SECONDS = 10.0
+
+# File processing
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
+
+# Time constants
+SECONDS_PER_MINUTE = 60
+SECONDS_PER_HOUR = 3600
+
+# Terminal colors
+ORANGE_LINE_COLOR = 214
+ALTERNATE_BG_COLOR = 87
+
+# GTFS feed URL
+GTFS_FEED_URL = "https://www.stm.info/sites/default/files/gtfs/gtfs_stm.zip"
+REALTIME_API_URL = "https://api.stm.info/pub/od/gtfs-rt/ic/v2/tripUpdates"
+
 
 def download():
     global revalidated
 
-    if datetime.datetime.now() >= (revalidated + datetime.timedelta(hours=24)).replace(
-        hour=3
-    ):
-        logger.info("Revalidating (last at {})", revalidated)
+    if datetime.datetime.now() >= (
+        revalidated + datetime.timedelta(hours=REVALIDATION_INTERVAL_HOURS)
+    ).replace(hour=REVALIDATION_HOUR):
+        logger.info(f"Revalidating (last at {revalidated})")
 
-        url = "https://www.stm.info/sites/default/files/gtfs/gtfs_stm.zip"
+        url = GTFS_FEED_URL
 
         try:
             mtime = os.path.getmtime(os.path.basename(url))
@@ -68,7 +94,11 @@ def download():
         logger.info("If-Modified-Since: {}", headers.get("If-Modified-Since"))
 
         resp = http_pool.request(
-            "GET", url, headers=headers, timeout=3600.0, preload_content=False
+            "GET",
+            url,
+            headers=headers,
+            timeout=DOWNLOAD_TIMEOUT_SECONDS,
+            preload_content=False,
         )
         logger.info(
             "Response: {} {} (headers: {})", resp.status, resp.reason, resp.headers
@@ -88,7 +118,7 @@ def download():
                 dir=".", prefix=os.path.basename(url) + "-", delete=False
             ) as f:
                 logger.info("Downloading to {}", f.name)
-                while chunk := resp.read(1024 * 1024):
+                while chunk := resp.read(DOWNLOAD_CHUNK_SIZE):
                     f.write(chunk)
 
             resp.release_conn()
@@ -194,14 +224,12 @@ def decorate_timetable(tt, now):
     return routes, tt
 
 
-def apply_realtime(
-    tt, now, url="https://api.stm.info/pub/od/gtfs-rt/ic/v2/tripUpdates"
-):
+def apply_realtime(tt, now, url=REALTIME_API_URL):
     resp = http_pool.request(
         "GET",
         url,
         headers={"Apikey": open("stm-apikey.txt").read().strip()},
-        timeout=10.0,
+        timeout=REALTIME_TIMEOUT_SECONDS,
     )
     logger.info(
         "Response: {} {} (headers: {}, size: {})",
@@ -356,11 +384,11 @@ def render(html, term, routes, nexts, now, warnings):
         if route_id == "2":
             classes.append("orange-line")
             # https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
-            term.write(curses.tparm(curses.tigetstr("setab"), 214))
+            term.write(curses.tparm(curses.tigetstr("setab"), ORANGE_LINE_COLOR))
             term.write(curses.tparm(curses.tigetstr("setaf"), curses.COLOR_BLACK))
         classes.append(next(evenodd))
         if rt and route_id != "2":
-            bg = curses.COLOR_BLUE if "even" in classes else 87
+            bg = curses.COLOR_BLUE if "even" in classes else ALTERNATE_BG_COLOR
             term.write(curses.tparm(curses.tigetstr("setab"), bg))
             fg = curses.COLOR_WHITE if "even" in classes else curses.COLOR_BLACK
             term.write(curses.tparm(curses.tigetstr("setaf"), fg))
@@ -376,16 +404,16 @@ def render(html, term, routes, nexts, now, warnings):
         if rt:
             (r,) = rt  # assert len 1
             total_seconds = int(r.leave_in.total_seconds())
-            if total_seconds < 60:
+            if total_seconds < SECONDS_PER_MINUTE:
                 delta_display = "Now"
                 term_display = "Now"
-            elif total_seconds < 3600:
-                delta_minutes = total_seconds // 60
+            elif total_seconds < SECONDS_PER_HOUR:
+                delta_minutes = total_seconds // SECONDS_PER_MINUTE
                 delta_display = f"{delta_minutes} min"
                 term_display = f"{delta_minutes:4} min"
             else:
-                delta_hours = total_seconds // 3600
-                delta_minutes = (total_seconds % 3600) // 60
+                delta_hours = total_seconds // SECONDS_PER_HOUR
+                delta_minutes = (total_seconds % SECONDS_PER_HOUR) // SECONDS_PER_MINUTE
                 delta_display = f"{delta_hours} hr {delta_minutes} min"
                 term_display = f"{delta_hours} hr {delta_minutes} min"
             html.write(f"<!-- {r} -->\n")
@@ -441,17 +469,24 @@ if __name__ == "__main__":
     g_lock = threading.Lock()
 
     download()
-    build_stop_timetable((datetime.datetime.now() - datetime.timedelta(hours=5)).date())
+    build_stop_timetable(
+        (
+            datetime.datetime.now() - datetime.timedelta(hours=TIMEZONE_OFFSET_HOURS)
+        ).date()
+    )
     g_tt = load_pickle()
 
     def _build_thread():
         global g_tt
         try:
             while True:
-                sleepUntil(6, 0)
+                sleepUntil(REBUILD_HOUR, 0)
                 download()
                 build_stop_timetable(
-                    (datetime.datetime.now() - datetime.timedelta(hours=5)).date()
+                    (
+                        datetime.datetime.now()
+                        - datetime.timedelta(hours=TIMEZONE_OFFSET_HOURS)
+                    ).date()
                 )
                 with g_lock:
                     g_tt = load_pickle()
@@ -523,6 +558,6 @@ if __name__ == "__main__":
                 self.send_header("Content-Length", "0")
                 self.end_headers()
 
-    server = http.server.ThreadingHTTPServer(("", 8000), RequestHandler)
+    server = http.server.ThreadingHTTPServer(("", SERVER_PORT), RequestHandler)
     logger.info("Server started")
     server.serve_forever()
