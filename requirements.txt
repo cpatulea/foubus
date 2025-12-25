@@ -1,5 +1,6 @@
 gtfs-kit>=10.1.1
 gtfs-realtime-bindings>=1.0.0
+loguru>=0.7.2
 pandas>=2.2.3
 protobuf>=5.29.3
 urllib3>=2.3.0
