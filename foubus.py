@@ -152,20 +152,21 @@ def decorate_timetable(tt, now):
     # Avoid future SettingWithCopyWarning
     tt = tt.copy()
 
-    tt["route_id_int"] = tt["route_id"].apply(int)
+    tt["route_id_int"] = tt["route_id"].astype(int)
 
-    def _trip_label(row):
-        headsign = row["trip_headsign"]
-        if headsign == "Station Henri-Bourassa":
-            return "Montmorency"
-        elif headsign == "Station Montmorency -Zone B":
-            return "Montmorency"
-        elif headsign == "Station Côte-Vertu":
-            return "Côte-Vertu"
-        else:
-            return row["route_id"] + " " + row["trip_headsign"]
+    # Map special headsigns to simplified labels
+    headsign_map = {
+        "Station Henri-Bourassa": "Montmorency",
+        "Station Montmorency -Zone B": "Montmorency",
+        "Station Côte-Vertu": "Côte-Vertu",
+    }
 
-    tt["trip_label"] = tt.apply(_trip_label, axis=1)
+    # Using map with fillna to create trip_label
+    tt["trip_label"] = (
+        tt["trip_headsign"]
+        .map(headsign_map)
+        .fillna(tt["route_id"] + " " + tt["trip_headsign"])
+    )
 
     def _departure_time_dt(row):
         isodate = row["date"][0:4] + "-" + row["date"][4:6] + "-" + row["date"][6:8]
@@ -220,8 +221,8 @@ def apply_realtime(
         text_format.MessageToString(fm.header, as_one_line=True),
         datetime.datetime.fromtimestamp(fm.header.timestamp),
         (
-            datetime.datetime.now() -
-            datetime.datetime.fromtimestamp(fm.header.timestamp)
+            datetime.datetime.now()
+            - datetime.datetime.fromtimestamp(fm.header.timestamp)
         ).total_seconds(),
     )
     logger.info(
