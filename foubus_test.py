@@ -1,12 +1,10 @@
 #!venv/bin/python3
 import curses
 import datetime
-import glob
 import http.server
 import io
 import logging
 import os
-import pickle
 import shutil
 import tempfile
 import threading
@@ -31,19 +29,19 @@ class FoubusTest(unittest.TestCase):
         # Exercise the download code, but then immediately replace with a
         # snapshot which matches the dates hardcoded in this test.
         foubus.download()
-        shutil.copy('testdata/gtfs_stm-2024-12-12.zip', 'gtfs_stm.zip')
+        shutil.copy("testdata/gtfs_stm-2024-12-12.zip", "gtfs_stm.zip")
         foubus.build_stop_timetable(datetime.date(2025, 1, 18))
         with open("stm-apikey.txt", "w"):
             pass
-        curses.setupterm(term='xterm-256color')
+        curses.setupterm(term="xterm-256color")
 
     def testRealtime(self):
         """
         Collect realtime test data:
-          for _ in $(seq 1 100); do curl -o tripUpdates-$(date +%Y%m%d-%H%M%S).pb https://api.stm.info/pub/od/gtfs-rt/ic/v2/tripUpdates -H 'Apikey: '$(cat stm-apikey.txt)' ; sleep 1h; done
+            for _ in $(seq 1 100); do curl -o tripUpdates-$(date +%Y%m%d-%H%M%S).pb https://api.stm.info/pub/od/gtfs-rt/ic/v2/tripUpdates -H 'Apikey: '$(cat stm-apikey.txt)' ; sleep 1h; done
 
         Inspect:
-          protoc --decode_raw < tripUpdates-20250118-162839.pb | grep '^      5: "' | egrep '"(17|35|36|190|371)"'
+            protoc --decode_raw < tripUpdates-20250118-162839.pb | grep '^      5: "' | egrep '"(17|35|36|190|371)"'
         """
         now = datetime.datetime.fromisoformat("2025-01-18T17:10:00")
         tt = foubus.load_pickle()

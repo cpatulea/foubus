@@ -5,7 +5,7 @@ import glob
 import http.server
 import io
 import itertools
-import logging
+import mimetypes
 import os
 import os.path
 import pickle
@@ -14,13 +14,13 @@ import sys
 import tempfile
 import threading
 import time
-import traceback
+
 import urllib.parse
+import logging
 
 import gtfs_kit
 import pandas as pd
 import urllib3
-import urllib3.exceptions
 from google.protobuf import text_format
 from google.transit import gtfs_realtime_pb2
 
@@ -28,7 +28,7 @@ LOG_FORMAT = "%(asctime)s [%(filename)s:%(lineno)d] [%(name)s] [%(threadName)s] 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO, format=LOG_FORMAT)
 logging.getLogger("urllib3").setLevel(logging.DEBUG)
 
-httppool = urllib3.PoolManager()
+http_pool = urllib3.PoolManager()
 revalidated = datetime.datetime.min
 
 STOPS = {
@@ -41,6 +41,8 @@ STOPS = {
     "Notre-Dame / Place Saint-Henri": 8,
 }
 
+SERVER_PORT = 8000
+
 
 def download():
     global revalidated
@@ -48,7 +50,7 @@ def download():
     if datetime.datetime.now() >= (revalidated + datetime.timedelta(hours=24)).replace(
         hour=3
     ):
-        logging.info("Revalidating (last at %s)", revalidated)
+        logging.info(f"Revalidating (last at {revalidated})")
 
         url = "https://www.stm.info/sites/default/files/gtfs/gtfs_stm.zip"
 
@@ -62,14 +64,16 @@ def download():
                     "%a, %d %b %Y %H:%M:%S GMT", time.gmtime(mtime)
                 )
             }
-        logging.info("If-Modified-Since: %s", headers.get("If-Modified-Since"))
+        logging.info(f"If-Modified-Since: {headers.get('If-Modified-Since')}")
 
-        resp = httppool.request(
-            "GET", url, headers=headers, timeout=3600.0, preload_content=False
+        resp = http_pool.request(
+            "GET",
+            url,
+            headers=headers,
+            timeout=3600.0,
+            preload_content=False,
         )
-        logging.info(
-            "Response: %s %s (headers: %s)", resp.status, resp.reason, resp.headers
-        )
+        logging.info(f"Response: {resp.status} {resp.reason} (headers: {resp.headers})")
 
         if resp.status == 304:
             revalidated = datetime.datetime.now()
@@ -84,15 +88,15 @@ def download():
             with tempfile.NamedTemporaryFile(
                 dir=".", prefix=os.path.basename(url) + "-", delete=False
             ) as f:
-                logging.info("Downloading to %s", f.name)
-                while chunk := resp.read(1024 * 1024):
+                logging.info(f"Downloading to {f.name}")
+                while chunk := resp.read(1024 * 1024):  # 1 MB chunks
                     f.write(chunk)
 
             resp.release_conn()
 
             os.utime(f.name, (last_modified, last_modified))
             os.rename(f.name, os.path.basename(url))
-            logging.info("Saved to %s", os.path.basename(url))
+            logging.info(f"Saved to {os.path.basename(url)}")
 
             revalidated = datetime.datetime.now()
         else:
@@ -118,7 +122,7 @@ def build_stop_timetable(date):
             tt.to_json(f"{d}/stop-{stop_id}.json")
             tt.to_pickle(f"{d}/stop-{stop_id}.pickle")
             tt.to_html(f"{d}/stop-{stop_id}.html")
-            logging.info("Built stop %s (%s)", stop_id, stop_name)
+            logging.info(f"Built stop {stop_id} ({stop_name})")
         try:
             shutil.rmtree("stop_timetable/")
         except FileNotFoundError:
@@ -149,40 +153,36 @@ def decorate_timetable(tt, now):
     # Avoid future SettingWithCopyWarning
     tt = tt.copy()
 
-    tt["route_id_int"] = tt["route_id"].apply(int)
+    tt["route_id_int"] = tt["route_id"].astype(int)
 
-    def _trip_label(row):
-        headsign = row["trip_headsign"]
-        if headsign == "Station Henri-Bourassa":
-            return "Montmorency"
-        elif headsign == "Station Montmorency -Zone B":
-            return "Montmorency"
-        elif headsign == "Station Côte-Vertu":
-            return "Côte-Vertu"
-        else:
-            return row["route_id"] + " " + row["trip_headsign"]
+    # Map special headsigns to simplified labels
+    headsign_map = {
+        "Station Henri-Bourassa": "Montmorency",
+        "Station Montmorency -Zone B": "Montmorency",
+        "Station Côte-Vertu": "Côte-Vertu",
+    }
 
-    tt["trip_label"] = tt.apply(_trip_label, axis=1)
+    # Using map with fillna to create trip_label
+    tt["trip_label"] = (
+        tt["trip_headsign"]
+        .map(headsign_map)
+        .fillna(tt["route_id"] + " " + tt["trip_headsign"])
+    )
 
-    def _departure_time_dt(row):
-        isodate = row["date"][0:4] + "-" + row["date"][4:6] + "-" + row["date"][6:8]
-        noon = datetime.datetime.combine(
-            datetime.date.fromisoformat(isodate), datetime.time(12, 0, 0)
-        )
-        dep = row["departure_time"]
-        h, m, s = map(int, dep.split(":"))
-        return (
-            noon
-            - datetime.timedelta(hours=12)
-            + datetime.timedelta(hours=h, minutes=m, seconds=s)
-        )
+    tt["date_dt"] = pd.to_datetime(tt["date"], format="%Y%m%d")
 
-    tt["departure_time_dt"] = tt.apply(_departure_time_dt, axis=1)
+    # Convert departure_time to timedelta and add to date
+    # departure_time format is HH:MM:SS (can exceed 24 hours for next-day service)
+    time_parts = tt["departure_time"].str.split(":", expand=True).astype(int)
+    tt["departure_time_dt"] = (
+        tt["date_dt"]
+        + pd.to_timedelta(time_parts[0], unit="h")
+        + pd.to_timedelta(time_parts[1], unit="m")
+        + pd.to_timedelta(time_parts[2], unit="s")
+    )
 
-    def _leave_in(row):
-        return row["departure_time_dt"] - now
-
-    tt["leave_in"] = tt.apply(_leave_in, axis=1)
+    # Calculate time until departure
+    tt["leave_in"] = tt["departure_time_dt"] - now
 
     routes = tt[["route_id", "route_id_int", "trip_label"]].value_counts()
     routes = pd.DataFrame(routes).sort_values(["route_id_int", "trip_label"])
@@ -193,38 +193,26 @@ def decorate_timetable(tt, now):
 def apply_realtime(
     tt, now, url="https://api.stm.info/pub/od/gtfs-rt/ic/v2/tripUpdates"
 ):
-    resp = httppool.request(
+    resp = http_pool.request(
         "GET",
         url,
         headers={"Apikey": open("stm-apikey.txt").read().strip()},
         timeout=10.0,
     )
     logging.info(
-        "Response: %s %s (headers: %s, size: %d)",
-        resp.status,
-        resp.reason,
-        resp.headers,
-        len(resp.data),
+        f"Response: {resp.status} {resp.reason} (headers: {resp.headers}, size: {len(resp.data)})"
     )
     if resp.status != 200:
-        logging.warning("Response error: %r", resp.data.decode("utf-8", "replace"))
+        logging.warning("Response error: {!r}", resp.data.decode("utf-8", "replace"))
         raise ValueError(str(resp.status))
     fm = gtfs_realtime_pb2.FeedMessage.FromString(resp.data)
     with open("tripUpdates.textproto", "w") as f:
         f.write(str(fm))
     logging.info(
-        "TripUpdates header: %s (timestamp %s, age %d seconds)",
-        text_format.MessageToString(fm.header, as_one_line=True),
-        datetime.datetime.fromtimestamp(fm.header.timestamp),
-        (
-            datetime.datetime.now()
-            - datetime.datetime.fromtimestamp(fm.header.timestamp)
-        ).total_seconds(),
+        f"TripUpdates header: {text_format.MessageToString(fm.header, as_one_line=True)} (timestamp {datetime.datetime.fromtimestamp(fm.header.timestamp)}, age {(datetime.datetime.now() - datetime.datetime.fromtimestamp(fm.header.timestamp)).total_seconds()} seconds)"
     )
     logging.info(
-        "TripUpdates: %d entity, %d stop_time_update",
-        len(fm.entity),
-        sum(len(e.trip_update.stop_time_update) for e in fm.entity),
+        f"TripUpdates: {len(fm.entity)} entity, {sum(len(e.trip_update.stop_time_update) for e in fm.entity)} stop_time_update"
     )
 
     updates = 0
@@ -232,10 +220,7 @@ def apply_realtime(
         assert entity.trip_update.trip.trip_id, str(entity)
         if (tt["trip_id"] == entity.trip_update.trip.trip_id).any():
             logging.info(
-                "trip_update for %s: %s: %d stop_time_update",
-                entity.trip_update.trip.trip_id,
-                text_format.MessageToString(entity.trip_update.trip, as_one_line=True),
-                len(entity.trip_update.stop_time_update),
+                f"trip_update for {entity.trip_update.trip.trip_id}: {text_format.MessageToString(entity.trip_update.trip, as_one_line=True)}: {len(entity.trip_update.stop_time_update)} stop_time_update"
             )
             last_stop_sequence = None
             for stu in entity.trip_update.stop_time_update:
@@ -260,15 +245,11 @@ def apply_realtime(
                 ]
                 if not row.empty:
                     assert len(row) == 1, row
-                    # print(row)
-                    # print(stu)
+                    # logging.info(row)
+                    # logging.info(stu)
                     if not stu.departure.time:
                         logging.warning(
-                            "No departure time: trip: %s stop_time_update: %s",
-                            text_format.MessageToString(
-                                entity.trip_update.trip, as_one_line=True
-                            ),
-                            text_format.MessageToString(stu, as_one_line=True),
+                            f"No departure time: trip: {text_format.MessageToString(entity.trip_update.trip, as_one_line=True)} stop_time_update: {text_format.MessageToString(stu, as_one_line=True)}"
                         )
                     else:
                         # row.loc[:,'realtime'] = stu.departure.time
@@ -282,44 +263,44 @@ def apply_realtime(
                             True,
                             datetime.datetime.fromtimestamp(stu.departure.time) - now,
                         ]
-                        print(row)
+                        logging.info(row)
                         updates += 1
 
-    logging.info("TripUpdates for us: %d", updates)
+    logging.info(f"TripUpdates for us: {updates}")
     return tt
 
 
 def next_trips(routes, tt, now):
-    tt["next"] = len(tt) * [False]
-    tt["last"] = len(tt) * [False]
-    # add walking time before picking next (might be too late)
-    def _add_walking_time(row):
-        return row["leave_in"] - pd.Timedelta(minutes=STOPS[row["stop_name"]])
+    tt["next"] = False
+    tt["last"] = False
 
-    tt["leave_in"] = tt.apply(_add_walking_time, axis=1)
-    for (route_id, _, trip_label), _ in routes.iterrows():
-        logging.info("= %s =", trip_label)
+    # add walking time before picking next (might be too late)
+    tt["leave_in"] = tt["leave_in"] - pd.to_timedelta(
+        tt["stop_name"].map(STOPS), unit="min"
+    )
+    for (_, _, trip_label), _ in routes.iterrows():
+        logging.info(f"= {trip_label} =")
         trips = list(
             tt[
                 (tt["trip_label"] == trip_label)
                 & (tt["leave_in"].apply(pd.Timedelta.total_seconds) >= 0)
             ][:2].itertuples()
         )
-        logging.info("Trips: %s", trips)
+        logging.info(f"Trips: {trips}")
         if len(trips) == 0:
             pass
         elif len(trips) == 1:
             tt.loc[pd.Index([trips[0].Index]), "next"] = True
             tt.loc[pd.Index([trips[0].Index]), "last"] = True
         elif len(trips) >= 2:
-            logging.info("Trip 2+ at index: %s", pd.Index([trips[0].Index]))
+            logging.info(f"Trip 2+ at index: {pd.Index([trips[0].Index])}")
             tt.loc[pd.Index([trips[0].Index]), "next"] = True
     tt = tt[tt["next"]]
-    tt["leave_in"] = tt["leave_in"].apply(
-        lambda dt: dt - pd.Timedelta(seconds=dt.seconds % 60)
-    )
-    logging.info("Next trips leave: %s", tt)
-    logging.info("Next trips next: %s", tt["next"])
+
+    tt["leave_in"] = tt["leave_in"].dt.floor("min")
+
+    logging.info(f"Next trips leave: {tt}")
+    logging.info(f"Next trips next: {tt['next']}")
     return tt
 
 
@@ -329,15 +310,17 @@ def render(html, term, routes, nexts, now, warnings):
     html.write("<style>\n")
     html.write(open("style.css").read())
     html.write("</style>\n")
-    term.write(curses.tparm(curses.tigetstr("cup"),0,0))
+    term.write(curses.tparm(curses.tigetstr("cup"), 0, 0))
     term.write(curses.tparm(curses.tigetstr("ed"), 2))
+
     def term_write(s):
-        term.write(s.encode('utf-8'))
-    print(routes)
+        term.write(s.encode("utf-8"))
+
+    logging.info(routes)
     evenodd = itertools.cycle(["even", "odd"])
     trip_index = 0
     for (route_id, _, trip_label), _ in routes.iterrows():
-        print(f"= {trip_label} =")
+        logging.info(f"= {trip_label} =")
         rt = nexts[
             (nexts["trip_label"] == trip_label) & (nexts["departure_time_dt"] >= now)
         ][:2]
@@ -345,74 +328,70 @@ def render(html, term, routes, nexts, now, warnings):
         classes = ["route"]
         if len(rt) == 0:
             classes.append("finished")
-            term.write(curses.tparm(curses.tigetstr('setab'), curses.COLOR_WHITE))
+            term.write(curses.tparm(curses.tigetstr("setab"), curses.COLOR_WHITE))
         if route_id == "2":
             classes.append("orange-line")
             # https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
-            term.write(curses.tparm(curses.tigetstr('setab'), 214))
-            term.write(curses.tparm(curses.tigetstr('setaf'), curses.COLOR_BLACK))
+            term.write(curses.tparm(curses.tigetstr("setab"), 214))
+            term.write(curses.tparm(curses.tigetstr("setaf"), curses.COLOR_BLACK))
         classes.append(next(evenodd))
         if rt and route_id != "2":
-            bg = curses.COLOR_BLUE if 'even' in classes else 87
-            term.write(curses.tparm(curses.tigetstr('setab'), bg))
-            fg = curses.COLOR_WHITE if 'even' in classes else curses.COLOR_BLACK
-            term.write(curses.tparm(curses.tigetstr('setaf'), fg))
+            bg = curses.COLOR_BLUE if "even" in classes else 87
+            term.write(curses.tparm(curses.tigetstr("setab"), bg))
+            fg = curses.COLOR_WHITE if "even" in classes else curses.COLOR_BLACK
+            term.write(curses.tparm(curses.tigetstr("setaf"), fg))
         html.write(f'<div class="{" ".join(classes)}">\n')
-        strikethrough = ''
+        strikethrough = ""
         if not rt:
             strikethrough = 'style="text-decoration: line-through;"'
         html.write(f'  <div class="label" {strikethrough}>{trip_label}</div>\n')
-        term_write(f'{trip_label:15.15} ')
-        print(rt)
+        term_write(f"{trip_label:15.15} ")
+        logging.info(rt)
         # The following code includes creative contributions from Claude, a generative AI system.
         # https://declare-ai.org/1.0.0/total.html
         if rt:
             (r,) = rt  # assert len 1
             total_seconds = int(r.leave_in.total_seconds())
             if total_seconds < 60:
-                delta_display = f"Now"
-                term_display = f'Now'
+                delta_display = "Now"
+                term_display = "Now"
             elif total_seconds < 3600:
                 delta_minutes = total_seconds // 60
                 delta_display = f"{delta_minutes} min"
-                term_display = f'{delta_minutes:4} min'
+                term_display = f"{delta_minutes:4} min"
             else:
                 delta_hours = total_seconds // 3600
                 delta_minutes = (total_seconds % 3600) // 60
                 delta_display = f"{delta_hours} hr {delta_minutes} min"
-                term_display = f'{delta_hours} hr {delta_minutes} min'
+                term_display = f"{delta_hours} hr {delta_minutes} min"
             html.write(f"<!-- {r} -->\n")
-            html.write(f'  <div class="trip"><span class="countdown" data-trip-index="{trip_index}" data-trip-seconds="{total_seconds}">{delta_display}</span>')
-            term_write(term_display + ' ')
+            html.write(
+                f'  <div class="trip"><span class="countdown" data-trip-index="{trip_index}" data-trip-seconds="{total_seconds}">{delta_display}</span>'
+            )
+            term_write(term_display + " ")
             if r.realtime:
-                html.write(f'    <img class="realtime" src="realtime.png"/>')
+                html.write('    <img class="realtime" src="realtime.png"/>')
             term_write(f'{"📡" if r.realtime else "  "} ')
             if r.last:
-                html.write(f'    <span class="last">LAST</span>')
+                html.write('    <span class="last">LAST</span>')
                 term_write(f'{"LAST" if r.last else "":4} ')
-            html.write(f"  </div>\n")
+            html.write("  </div>\n")
             trip_index += 1
         else:
             html.write('<div class="trip"></div>\n')
         html.write("</div>\n")
 
-        term.write(curses.tparm(curses.tigetstr('setab'), 0))
-        term.write(curses.tparm(curses.tigetstr('sgr'), 0))
-        term_write('\n')
-    html.write(f"<div>Times include walking time to the stop.</div>\n")
-    html.write(f'<div>Last updated: <span class="last-updated-time">{now.strftime("%x %H:%M")}</span><br/><span class="last-updated-relative">00:00 ago</span></div>\n')
+        term.write(curses.tparm(curses.tigetstr("setab"), 0))
+        term.write(curses.tparm(curses.tigetstr("sgr"), 0))
+        term_write("\n")
+    html.write("<div>Times include walking time to the stop.</div>\n")
+    html.write(
+        f'<div>Last updated: <span class="last-updated-time">{now.strftime("%x %H:%M")}</span><br/><span class="last-updated-relative">00:00 ago</span></div>\n'
+    )
     # end of partially AI generated code.
-    term_write(f'Last updated: {now}\n')
-    html.write(f"<div>Warnings: ")
-    term_write(f'Warnings: ')
-    if not warnings:
-        html.write("none")
-        term_write('none')
-    else:
-        html.write(" ".join(warnings))
-        term_write(" ".join(warnings))
-    html.write("</div>")
-    term_write('\n')
+    term_write(f"Last updated: {now}\n")
+    html.write("<div>Warnings: ")
+    term_write("Warnings: ")
 
 
 # https://stackoverflow.com/a/65656371/2793863
@@ -424,8 +403,83 @@ def sleepUntil(hour, minute):
     time.sleep((future - t).total_seconds())
 
 
+class RequestHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def _send_response(self, data, content_type=None, status=200):
+        """Helper to send HTTP response with proper headers."""
+        self.send_response(status)
+        if content_type:
+            self.send_header("Content-Type", content_type)
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        logging.debug(f"Request: {path}")
+
+        try:
+            if path in ["/", "/realtime.png"]:
+                # Serve static files
+                file_path = path.lstrip("/") or "index.html"
+                try:
+                    with open(file_path, "rb") as f:
+                        data = f.read()
+                except FileNotFoundError:
+                    logging.warning(f"File not found: {file_path}")
+                    self._send_response(b"File not found", "text/plain", 404)
+                else:
+                    content_type, _ = mimetypes.guess_type(file_path)
+                    self._send_response(data, content_type)
+
+            elif path == "/loading.html":
+                data = "Loading...".encode("utf-8")
+                self._send_response(data, "text/html; charset=utf-8")
+
+            elif path in ["/schedule.html", "/schedule.txt"]:
+                # Generate dynamic schedule
+                now = datetime.datetime.now()
+                warnings = []
+                with g_lock:
+                    routes, tt = decorate_timetable(g_tt, now)
+                tt["realtime"] = False
+                try:
+                    tt = apply_realtime(tt, now)
+                except Exception as e:
+                    logging.warning(f"Error applying realtime: {e}")
+                    warnings.append("Error applying realtime: " + str(e))
+                nexts = next_trips(routes, tt, now)
+                html = io.StringIO()
+                term = io.BytesIO()
+                render(html, term, routes, nexts, now, warnings)
+
+                if path.endswith(".html"):
+                    data = html.getvalue().encode("utf-8")
+                    self._send_response(data, "text/html; charset=utf-8")
+                elif path.endswith(".txt"):
+                    data = term.getvalue()
+                    self._send_response(data, "text/plain; charset=utf-8")
+                else:
+                    raise ValueError(f"Unexpected path format: {path}")
+
+            else:
+                # 404 Not Found
+                self._send_response(b"", None, 404)
+
+        except Exception as e:
+            logging.error(f"Error handling request {path}: {e}")
+            try:
+                self._send_response(
+                    f"Internal Server Error: {e}".encode("utf-8"), "text/plain", 500
+                )
+            except Exception:
+                pass  # If we can't send error response, give up
+
+
 if __name__ == "__main__":
-    curses.setupterm(term='xterm-256color')
+    curses.setupterm(term="xterm-256color")
 
     g_lock = threading.Lock()
 
@@ -444,74 +498,14 @@ if __name__ == "__main__":
                 )
                 with g_lock:
                     g_tt = load_pickle()
-        except:
-            traceback.print_exc()
+        except Exception:
+            logging.exception("Build thread error")
             os.abort()
 
     th = threading.Thread(target=_build_thread, name="build thread")
     th.daemon = True
     th.start()
 
-    class RequestHandler(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def do_GET(self):
-            path = urllib.parse.urlparse(self.path).path
-            if path in ["/", "/realtime.png"]:
-                self.send_response(200)
-                path = path.lstrip("/")
-                path = path if path else "index.html"
-                with open(path, "rb") as f:
-                    data = f.read()
-                self.send_header("Connection", "keep-alive")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-            elif path in ["/loading.html"]:
-                self.send_response(200)
-                data = "Loading...".encode("utf-8")
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Connection", "keep-alive")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-            elif path in ["/schedule.html", "/schedule.txt"]:
-                self.send_response(200)
-                now = datetime.datetime.now()
-                warnings = []
-                with g_lock:
-                    routes, tt = decorate_timetable(g_tt, now)
-                tt["realtime"] = False
-                try:
-                    tt = apply_realtime(tt, now)
-                except Exception as e:
-                    warnings.append("Error applying realtime: " + str(e))
-                nexts = next_trips(routes, tt, now)
-                html = io.StringIO()
-                term = io.BytesIO()
-                render(html, term, routes, nexts, now, warnings)
-                if path.endswith(".html"):
-                    data = html.getvalue().encode("utf-8")
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
-                    self.send_header("Connection", "keep-alive")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                elif path.endswith(".txt"):
-                    data = term.getvalue()
-                    self.send_header("Content-Type", "text/plain; charset=utf-8")
-                    self.send_header("Connection", "keep-alive")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                else:
-                    assert False
-            else:
-                self.send_response(404)
-                self.send_header("Connection", "keep-alive")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-
-    server = http.server.ThreadingHTTPServer(("", 8000), RequestHandler)
-    logging.info("Server started")
+    server = http.server.ThreadingHTTPServer(("", SERVER_PORT), RequestHandler)
+    logging.info(f"Server started at port {SERVER_PORT}")
     server.serve_forever()
